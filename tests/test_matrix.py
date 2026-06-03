@@ -4,8 +4,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import markov.encoder as encoder
-import markov.parser as parser
 from markov import build_chord_vocabulary, encode_chords, parse_midi
 from markov.harmony import UNK_CHORD_INDEX, ChordChain
 
@@ -46,11 +44,11 @@ def test_sample_returns_valid_chord_index(trained_chain: ChordChain) -> None:
         assert 0 <= sampled < trained_chain.vocab_size
 
 def test_empty_corpus_raises_descriptive_error() -> None:
+    chord_to_index = {"<unk>": UNK_CHORD_INDEX, "C-major": 1}
     chain = ChordChain()
-    encoder.chord_to_index = {"<unk>": UNK_CHORD_INDEX, "C-major": 1}
 
     with pytest.raises(ValueError, match="empty corpus.*no MIDI file paths"):
-        chain.train_corpus([], parser, encoder)
+        chain.train_corpus([], parse_midi, encode_chords, chord_to_index)
 
     chain.train([])
     with pytest.raises(RuntimeError, match="train ChordChain before normalizing"):
@@ -77,3 +75,15 @@ def test_counts_accumulate_across_sequences() -> None:
     assert chain.counts[2, 3] == 2
     assert chain.counts[3, 1] == 1
     assert int(chain.counts.sum()) == 4
+
+
+def test_save_load_round_trip(trained_chain: ChordChain, tmp_path: Path) -> None:
+    out = tmp_path / "chord_chain.npz"
+    trained_chain.save(out)
+    loaded = ChordChain.load(out)
+
+    assert loaded.vocab_size == trained_chain.vocab_size
+    np.testing.assert_array_equal(loaded.counts, trained_chain.counts)
+    np.testing.assert_array_equal(
+        loaded.transition_matrix, trained_chain.transition_matrix
+    )
