@@ -20,6 +20,7 @@ class ChordChain:
     def __init__(self, vocab_size: int | None = None) -> None:
         self.vocab_size = vocab_size
         self.counts: np.ndarray | None = None
+        self.transition_matrix: np.ndarray | None = None
 
     # accumulate bigram counts from encoded chord sequences
     def train(self, chord_sequences: Sequence[Sequence[ChordIndex]]) -> None:
@@ -53,3 +54,48 @@ class ChordChain:
                         f"chord index out of range [0, {size}): ({prev}, {curr})"
                     )
                 self.counts[prev, curr] += 1
+
+    def normalize(self) -> None:
+        """Convert raw counts to a row-stochastic transition matrix."""
+        if self.counts is None:
+            raise RuntimeError("Cannot normalize: train ChordChain before normalizing.")
+
+        row_sums = self.counts.sum(axis=1, keepdims=True, dtype=np.float64)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            self.transition_matrix = np.divide(
+                self.counts,
+                row_sums,
+                where=row_sums > 0,
+                out=np.zeros(self.counts.shape, dtype=np.float64),
+            )
+
+    # sample the next chord index from the row for current_chord_index
+    def sample(self, current_chord_index: ChordIndex) -> ChordIndex:
+        if self.transition_matrix is None:
+            raise RuntimeError(
+                "Cannot sample: transition matrix is not normalized. "
+                "Call normalize() on ChordChain after training."
+            )
+        if self.transition_matrix is None:
+            raise RuntimeError(
+                "Cannot sample: transition matrix is not normalized. "
+                "Call normalize() on ChordChain after training."
+            )
+        if self.vocab_size is None:
+            raise RuntimeError("Cannot sample: ChordChain has no vocabulary size.")
+
+        if not 0 <= current_chord_index < self.vocab_size:
+            raise ValueError(
+                f"current_chord_index {current_chord_index} out of range "
+                f"[0, {self.vocab_size})"
+            )
+
+        row = self.transition_matrix[current_chord_index]
+        if row.sum() <= 0:
+            raise RuntimeError(
+                f"Cannot sample: chord index {current_chord_index} has no "
+                "outgoing transitions (row sum is zero)."
+            )
+
+        indices = np.arange(self.vocab_size)
+        return int(np.random.choice(indices, p=row))
