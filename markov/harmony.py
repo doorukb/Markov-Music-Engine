@@ -7,9 +7,17 @@ Level 1 : chord-level Markov chain.
 - Serialize and deserialize the transition matrix
 """
 from __future__ import annotations
-from typing import List, Sequence
+
+import logging
+from pathlib import Path
+from types import ModuleType
+from typing import Mapping, Sequence, Union
 import numpy as np
-from markov.encoder import ChordIndex
+from tqdm import tqdm
+from markov.encoder import ChordIndex, ChordToken
+
+logger = logging.getLogger(__name__)
+PathLike = Union[str, Path]
 
 UNK_CHORD_INDEX: ChordIndex = 0
 
@@ -55,11 +63,43 @@ class ChordChain:
                     )
                 self.counts[prev, curr] += 1
 
+    # parse and encode each MIDI file, accumulating bigram counts (no normalization)
+    def train_corpus(self,
+        paths: Sequence[PathLike],
+        parser: ModuleType,
+        encoder: ModuleType,
+    ) -> None:
+        from markov.parser import ParseError
+
+        chord_to_index: Mapping[ChordToken, ChordIndex] | None = getattr(
+            encoder, "chord_to_index", None
+        )
+        if chord_to_index is None:
+            raise ValueError(
+                "encoder.chord_to_index must be set before train_corpus; "
+                "build it with encoder.build_chord_vocabulary()."
+            )
+
+        if self.vocab_size is None:
+            self.vocab_size = len(chord_to_index)
+        elif self.vocab_size != len(chord_to_index):
+            raise ValueError(
+                f"ChordChain vocab_size {self.vocab_size} does not match "
+                f"encoder.chord_to_index size {len(chord_to_index)}"
+            )
+
+        for path in tqdm(paths, desc="Training chord corpus"):
+            try:
+                chord_sequence, _ = parser.parse_midi(Path(path))
+                encoded = encoder.encode_chords(chord_sequence, chord_to_index)
+                self.train([encoded])
+            except ParseError as exc:
+                logger.warning("Skipping %s: %s", path, exc)
+
+    # convert raw counts to a row-stochastic transition matrix
     def normalize(self) -> None:
-        """Convert raw counts to a row-stochastic transition matrix."""
         if self.counts is None:
             raise RuntimeError("Cannot normalize: train ChordChain before normalizing.")
-
         row_sums = self.counts.sum(axis=1, keepdims=True, dtype=np.float64)
         with np.errstate(divide="ignore", invalid="ignore"):
             self.transition_matrix = np.divide(
@@ -71,11 +111,6 @@ class ChordChain:
 
     # sample the next chord index from the row for current_chord_index
     def sample(self, current_chord_index: ChordIndex) -> ChordIndex:
-        if self.transition_matrix is None:
-            raise RuntimeError(
-                "Cannot sample: transition matrix is not normalized. "
-                "Call normalize() on ChordChain after training."
-            )
         if self.transition_matrix is None:
             raise RuntimeError(
                 "Cannot sample: transition matrix is not normalized. "

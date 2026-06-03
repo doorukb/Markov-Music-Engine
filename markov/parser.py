@@ -6,7 +6,12 @@ from music21 import chord, converter, note, pitch
 NoteToken = int
 ChordToken = str
 
-__all__ = ["parse_midi", "ChordToken", "NoteToken"]
+
+class ParseError(Exception):
+    """Raised when a MIDI file cannot be parsed into chord/note sequences."""
+
+
+__all__ = ["parse_midi", "ChordToken", "NoteToken", "ParseError"]
 _COMMON_NAME_TO_QUALITY: dict[str, str] = {
     "major triad": "major",
     "minor triad": "minor",
@@ -52,20 +57,29 @@ def parse_midi(midi_path: Path) -> Tuple[List[ChordToken], List[NoteToken]]:
     if not midi_path.is_file():
         raise FileNotFoundError(f"MIDI file not found: {midi_path}")
 
-    score = converter.parse(str(midi_path))
-    chordified = score.chordify()
+    try:
+        score = converter.parse(str(midi_path))
+        chordified = score.chordify()
+    except Exception as exc:
+        raise ParseError(f"Failed to parse {midi_path}: {exc}") from exc
 
     chord_sequence: List[ChordToken] = []
     note_sequence: List[NoteToken] = []
 
-    for element in chordified.flatten().notesAndRests:
-        if isinstance(element, note.Rest):
-            continue
-        if isinstance(element, note.Note):
-            chord_sequence.append(_note_to_label(element))
-            note_sequence.append(_soprano_midi(element))
-        elif isinstance(element, chord.Chord):
-            chord_sequence.append(_chord_to_label(element))
-            note_sequence.append(_soprano_midi(element))
+    try:
+        for element in chordified.flatten().notesAndRests:
+            if isinstance(element, note.Rest):
+                continue
+            if isinstance(element, note.Note):
+                chord_sequence.append(_note_to_label(element))
+                note_sequence.append(_soprano_midi(element))
+            elif isinstance(element, chord.Chord):
+                chord_sequence.append(_chord_to_label(element))
+                note_sequence.append(_soprano_midi(element))
+    except Exception as exc:
+        raise ParseError(f"Failed to extract sequences from {midi_path}: {exc}") from exc
+
+    if not chord_sequence:
+        raise ParseError(f"No chord events found in {midi_path}")
 
     return chord_sequence, note_sequence
