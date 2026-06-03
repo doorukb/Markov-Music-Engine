@@ -220,8 +220,10 @@ __marimo__/
 tests/
 tests/__pycache__/
 tests/__init__.py
-tests/test_encoder.py
-tests/test_markov.py
-tests/test_generator.py
-tests/test_harmony.py
+tests/conftest.py
 tests/test_matrix.py
+tests/test_encoder.py
+tests/test_generator.py
+tests/test_parser.py
+tests/test_harmony.py
+tests/melody.py
