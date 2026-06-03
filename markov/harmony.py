@@ -71,6 +71,11 @@ class ChordChain:
     ) -> None:
         from markov.parser import ParseError
 
+        if not paths:
+            raise ValueError(
+                "Cannot train on an empty corpus: no MIDI file paths provided."
+            )
+
         chord_to_index: Mapping[ChordToken, ChordIndex] | None = getattr(
             encoder, "chord_to_index", None
         )
@@ -96,10 +101,19 @@ class ChordChain:
             except ParseError as exc:
                 logger.warning("Skipping %s: %s", path, exc)
 
+        if self.counts is None or self.counts.sum() == 0:
+            raise ValueError(
+                "Cannot train on an empty corpus: no chord transitions were accumulated."
+            )
+
     # convert raw counts to a row-stochastic transition matrix
     def normalize(self) -> None:
         if self.counts is None:
             raise RuntimeError("Cannot normalize: train ChordChain before normalizing.")
+        if self.counts.sum() == 0:
+            raise RuntimeError(
+                "Cannot normalize: no chord transitions were accumulated during training."
+            )
         row_sums = self.counts.sum(axis=1, keepdims=True, dtype=np.float64)
         with np.errstate(divide="ignore", invalid="ignore"):
             self.transition_matrix = np.divide(

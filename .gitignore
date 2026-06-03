@@ -217,4 +217,13 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+tests/
 tests/__pycache__/
+tests/__init__.py
+tests/conftest.py
+tests/test_matrix.py
+tests/test_encoder.py
+tests/test_generator.py
+tests/test_parser.py
+tests/test_harmony.py
+tests/melody.py
