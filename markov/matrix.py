@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Mapping, Sequence, Tuple
 import numpy as np
-from config import DEFAULT_N_CHORDS, SUPPORTED_ORDERS
+from config import DEFAULT_N_CHORDS, SMOOTHING_ALPHA, SUPPORTED_ORDERS
 from markov.encoder import ChordIndex, NoteIndex
 from markov.harmony import ChordChain, ParseFn, PathLike, UNK_CHORD_INDEX
 from markov.melody import EncodeChordsFn, MelodyChain
@@ -46,8 +46,8 @@ class HierarchicalMarkovModel:
             raise ValueError("no chord transitions accumulated")
         if not self.melody.counts:
             raise ValueError("no note transitions accumulated")
-        self.harmony.normalize()
-        self.melody.normalize()
+        self.harmony.normalize(alpha=SMOOTHING_ALPHA)
+        self.melody.normalize(alpha=SMOOTHING_ALPHA)
 
     # sample a chord progression and melody notes per chord
     # return [(chord_index, [note_index, ...]), ...] of length n_chords
