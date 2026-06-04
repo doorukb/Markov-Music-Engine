@@ -4,7 +4,11 @@ from config import CONVERGENCE_THRESHOLD, MAX_ITERATIONS
 
 _EIGENVALUE_UNIT_TOL = 1e-6
 
-__all__ = ["stationary_power_iteration", "stationary_eigenvector"]
+__all__ = [
+    "stationary_power_iteration",
+    "stationary_eigenvector",
+    "chain_entropy",
+]
 
 # estimate the stationary distribution π with power iteration
 # starts from a uniform distribution and iterates until the L1 change in π is below tol
@@ -45,3 +49,18 @@ def stationary_eigenvector(transition_matrix: np.ndarray) -> np.ndarray:
     if total <= 0:
         raise ValueError("stationary eigenvector has no positive mass after normalization")
     return pi / total
+
+# compute the stationary-weighted average row Shannon entropy (bits)
+# for each row, H(row) = -sum(p * log2(p)) over entries with p > 0. The result is sum_i pi_i * H(row_i) where pi is the stationary distribution.
+# a uniform transition matrix (every row 1/n) attains the maximum entropy log2(n) per row and therefore the maximum chain entropy for a given size.
+def chain_entropy(transition_matrix: np.ndarray) -> float:
+    p = np.asarray(transition_matrix, dtype=np.float64)
+    if p.ndim != 2 or p.shape[0] != p.shape[1]:
+        raise ValueError(f"transition_matrix must be square 2D; got shape {p.shape}")
+
+    pi = stationary_power_iteration(p)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        row_entropy = -np.sum(np.where(p > 0, p * np.log2(p), 0.0), axis=1)
+    # return the stationary-weighted average row Shannon entropy, in bits
+    return float(pi @ row_entropy)
