@@ -7,6 +7,7 @@ MIDI file writing and audio synthesis
 - Handle FluidSynth availability gracefully (fallback: MIDI-only mode)
 """
 from __future__ import annotations
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,8 @@ from config import AUDIO_FORMAT, OUTPUTS_DIR, SAMPLE_RATE, SOUNDFONT_PATH
 from markov.generator import CompositionResult
 
 __all__ = ["render_midi", "render_wav", "composition_to_stream"]
+
+logger = logging.getLogger(__name__)
 
 MEASURE_QUARTER_LENGTH = 4.0
 
@@ -39,11 +42,13 @@ def composition_to_stream(composition_result: CompositionResult) -> stream.Score
     part.insert(0, tempo.MetronomeMark(number=composition_result.tempo_bpm))
 
     measure_offset = 0.0
+    time_sig = meter.TimeSignature("4/4")
     for measure_number, (_chord_index, note_indices) in enumerate(
         composition_result.composition, start=1
     ):
         measure = stream.Measure(number=measure_number)
-        measure.insert(0, meter.TimeSignature("4/4"))
+        if measure_number == 1:
+            measure.insert(0, time_sig)
 
         note_count = len(note_indices)
         if note_count > 0:
@@ -67,6 +72,7 @@ def render_midi(
     midi_path = _resolve_output_path(output_path, ".mid")
     score = composition_to_stream(composition_result)
     score.write("midi", str(midi_path))
+    logger.info("MIDI written: %s", midi_path)
     return midi_path
 
 # render a MIDI file to a WAV file using FluidSynth
@@ -109,4 +115,5 @@ def render_wav(midi_path: str | Path, output_path: str | Path) -> Path:
 
     if not wav_path.is_file():
         raise RuntimeError(f"FluidSynth did not produce expected WAV file: {wav_path}")
+    logger.info("WAV written: %s", wav_path)
     return wav_path

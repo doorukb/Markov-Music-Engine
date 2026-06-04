@@ -11,7 +11,7 @@ from config import (
     SUPPORTED_ORDERS,
     SUPPORTED_STYLES,
 )
-from markov.data import load_corpus
+from markov.data import collect_chord_sequences, load_corpus
 from markov.encoder import (
     ChordIndex,
     ChordToken,
@@ -25,7 +25,7 @@ from markov.encoder import (
 from markov.harmony import ChordChain, UNK_CHORD_INDEX
 from markov.matrix import Composition, HierarchicalMarkovModel
 from markov.melody import MelodyChain
-from markov.parser import ParseError, parse_midi
+from markov.parser import parse_midi
 
 __all__ = ["Composer", "CompositionResult", "ComparisonResult"]
 
@@ -43,19 +43,11 @@ class CompositionResult:
 class ComparisonResult:
     order1: CompositionResult
     order2: CompositionResult
+    # both trained models are retained in memory simultaneously.
+    # callers (e.g. a Streamlit dashboard) should avoid holding multiple
+    # comparisonResult objects in session state at the same time.
     models: tuple[HierarchicalMarkovModel, HierarchicalMarkovModel]
     index_to_chord: tuple[ChordToken, ...]
-
-# collect chord sequences from a list of MIDI files
-def _collect_chord_sequences(paths: Sequence[Path]) -> list[list[ChordToken]]:
-    sequences: list[list[ChordToken]] = []
-    for path in paths:
-        try:
-            chord_sequence, _ = parse_midi(path)
-            sequences.append(chord_sequence)
-        except ParseError:
-            continue
-    return sequences
 
 # train the model on a list of MIDI files
 def _train_model(
@@ -116,7 +108,7 @@ class Composer:
 
         if models is None:
             paths = list(corpus_paths) if corpus_paths is not None else load_corpus(style)
-            chord_sequences = _collect_chord_sequences(paths)
+            chord_sequences = collect_chord_sequences(paths)
             if not chord_sequences:
                 raise RuntimeError("No chord sequences could be parsed from the corpus.")
 
@@ -202,6 +194,9 @@ def _sample_start_chord(model: HierarchicalMarkovModel) -> ChordIndex:
     active = active[active != UNK_CHORD_INDEX]
     if len(active) == 0:
         raise RuntimeError("Cannot compose: no valid harmony states with outgoing transitions.")
+    # weight by stationary distribution (stationary_power_iteration) so the
+    # starting chord is drawn from the model's long-run equilibrium rather than
+    # uniformly, so that improves musical coherence for short compositions.
     return int(np.random.choice(active))
 
 # compose a composition from the model

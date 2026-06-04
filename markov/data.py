@@ -7,6 +7,8 @@ from typing import List
 from music21 import corpus
 from config import DATA_RAW_DIR, SUPPORTED_STYLES
 
+__all__ = ["load_corpus", "collect_chord_sequences", "download_nottingham"]
+
 logger = logging.getLogger(__name__)
 
 # special thanks to jukedeck for the nottingham MIDI dataset
@@ -59,10 +61,7 @@ def _load_nottingham_paths(style: str) -> List[Path]:
 
     midi_dir = NOTTINGHAM_DIR / "MIDI" / subfolder
     if not midi_dir.exists():
-        raise FileNotFoundError(
-            f"expected Nottingham subfolder not found: {midi_dir}\n"
-            f"try deleting {NOTTINGHAM_DIR} and re-running to re-download."
-        )
+        raise FileNotFoundError(f"expected Nottingham subfolder not found: {midi_dir}\ntry deleting {NOTTINGHAM_DIR} and re-running to re-download.")
 
     paths = sorted(midi_dir.glob("*.mid"))
     logger.info(f"Nottingham [{style}]: {len(paths)} files found.")
@@ -94,15 +93,10 @@ def load_corpus(style: str, source: str = "both") -> List[Path]:
             paths += _load_nottingham_paths(style)
         except Exception as e:
             logger.warning(f"Nottingham load failed for '{style}': {e}")
-
     if source in ("music21", "both"):
         paths += _load_music21_paths(style)
-
     if not paths:
-        raise RuntimeError(
-            f"No MIDI files found for style='{style}', source='{source}'. "
-            f"Check your data directory: {DATA_RAW_DIR}"
-        )
+        raise RuntimeError(f"No MIDI files found for style='{style}', source='{source}'. Check your data directory: {DATA_RAW_DIR}")
 
     # deduplicate while preserving order
     seen = set()
@@ -114,3 +108,16 @@ def load_corpus(style: str, source: str = "both") -> List[Path]:
 
     logger.info(f"load_corpus(style='{style}'): {len(unique)} total files.")
     return unique
+
+# collect chord sequences from a list of MIDI files
+def collect_chord_sequences(paths: List[Path]) -> List[List[str]]:
+    from markov.parser import ParseError, parse_midi
+    
+    sequences: List[List[str]] = []
+    for path in paths:
+        try:
+            chord_sequence, _ = parse_midi(path)
+            sequences.append(chord_sequence)
+        except ParseError as exc:
+            logger.warning("skipping %s: %s", path, exc)
+    return sequences
