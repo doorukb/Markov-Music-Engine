@@ -1,5 +1,9 @@
 from __future__ import annotations
 import json
+import logging
+from tqdm import tqdm
+from markov.encoder import encode_notes
+from markov.parser import ParseError
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Mapping, Sequence, Tuple
@@ -17,6 +21,7 @@ _MELODY_CHAIN_FILE = "melody_chain.npz"
 _MODEL_META_FILE = "model_meta.json"
 
 __all__ = ["HierarchicalMarkovModel", "Composition"]
+logger = logging.getLogger(__name__)
 
 # hierarchical Markov model to compose the harmony and melody layers
 class HierarchicalMarkovModel:
