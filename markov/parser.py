@@ -5,13 +5,12 @@ from music21 import chord, converter, note, pitch
 
 NoteToken = int
 ChordToken = str
-
-
+# exception raised when a MIDI file cannot be parsed into chord/note sequences
 class ParseError(Exception):
-    """Raised when a MIDI file cannot be parsed into chord/note sequences."""
-
+    pass
 
 __all__ = ["parse_midi", "ChordToken", "NoteToken", "ParseError"]
+
 _COMMON_NAME_TO_QUALITY: dict[str, str] = {
     "major triad": "major",
     "minor triad": "minor",

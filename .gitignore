@@ -218,6 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 tests/
+tests/.pytest_cache/
 tests/__pycache__/
 tests/__init__.py
 tests/conftest.py
@@ -227,3 +228,4 @@ tests/test_generator.py
 tests/test_parser.py
 tests/test_harmony.py
 tests/melody.py
+pytest.ini
