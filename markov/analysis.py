@@ -1,7 +1,9 @@
 from __future__ import annotations
 import math
+from typing import Any, Sequence
 import numpy as np
 from config import CONVERGENCE_THRESHOLD, MAX_ITERATIONS
+from markov.parser import ChordToken
 
 _EIGENVALUE_UNIT_TOL = 1e-6
 
@@ -11,8 +13,10 @@ __all__ = [
     "chain_entropy",
     "spectral_gap",
     "mixing_time_estimate",
+    "summarise",
 ]
 
+# ensure the transition matrix is square and has at least min_size rows and columns
 def _as_square_transition_matrix(transition_matrix: np.ndarray, *, min_size: int = 1) -> np.ndarray:
     p = np.asarray(transition_matrix, dtype=np.float64)
     if p.ndim != 2 or p.shape[0] != p.shape[1]:
@@ -82,3 +86,28 @@ def mixing_time_estimate(transition_matrix: np.ndarray) -> int:
     if gap <= 0:
         raise ValueError(f"spectral gap must be positive for mixing time estimate; got {gap}")
     return math.ceil(1.0 / gap)
+
+# dashboard-ready summary of a chord transition matrix
+def summarise(transition_matrix: np.ndarray, index_to_chord: Sequence[ChordToken]) -> dict[str, Any]:
+    p = _as_square_transition_matrix(transition_matrix)
+    if len(index_to_chord) != p.shape[0]:
+        raise ValueError(f"index_to_chord length {len(index_to_chord)} does not match transition matrix size {p.shape[0]}")
+
+    pi = stationary_power_iteration(p)
+    entropy_bits = chain_entropy(p)
+    mixing_time_steps = mixing_time_estimate(p)
+
+    dominant_index = int(np.argmax(pi))
+    dominant_chord = index_to_chord[dominant_index]
+    dominant_chord_pct = float(pi[dominant_index] * 100.0)
+
+    stationary_distribution = {index_to_chord[i]: float(pi[i]) for i in range(p.shape[0])}
+
+    # return the summary
+    return {
+        "dominant_chord": dominant_chord,
+        "dominant_chord_pct": dominant_chord_pct,
+        "entropy_bits": entropy_bits,
+        "mixing_time_steps": mixing_time_steps,
+        "stationary_distribution": stationary_distribution,
+    }
