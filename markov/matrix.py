@@ -7,6 +7,9 @@ HierarchicalMarkovModel : composes the harmony and melody layers
 - Act as the single object passed to the generator and analysis modules
 """
 from __future__ import annotations
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Mapping, Sequence, Tuple
 import numpy as np
 from config import DEFAULT_N_CHORDS, SUPPORTED_ORDERS
@@ -16,6 +19,11 @@ from markov.melody import EncodeChordsFn, MelodyChain, NoteState
 from markov.parser import ChordToken, NoteToken
 
 Composition = List[Tuple[ChordIndex, List[NoteIndex]]]
+
+_CHORD_CHAIN_FILE = "chord_chain.npz"
+_MELODY_CHAIN_FILE = "melody_chain.npz"
+_MODEL_META_FILE = "model_meta.json"
+
 __all__ = ["HierarchicalMarkovModel", "Composition"]
 
 # hierarchical Markov model to compose the harmony and melody layers
@@ -108,3 +116,60 @@ class HierarchicalMarkovModel:
             notes.append(next_note)
             prev_note, current = current, next_note
         return notes
+
+    # save the harmony, melody, and metadata under the given directory
+    def save(self, directory: PathLike) -> None:
+        if self.harmony.vocab_size is None:
+            raise RuntimeError("Cannot save: ChordChain has not been trained.")
+        if not self.melody.counts:
+            raise RuntimeError("Cannot save: MelodyChain has not been trained.")
+
+        out_dir = Path(directory)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        self.harmony.save(out_dir / _CHORD_CHAIN_FILE)
+        self.melody.save(out_dir / _MELODY_CHAIN_FILE)
+
+        meta = {
+            "order": self.melody.order,
+            "chord_vocab_size": self.harmony.vocab_size,
+            "note_vocab_size": self.melody.note_vocab_size,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        (out_dir / _MODEL_META_FILE).write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
+
+    # load a model saved with save()
+    @classmethod
+    def load(cls, directory: PathLike) -> HierarchicalMarkovModel:
+        in_dir = Path(directory)
+        if not in_dir.is_dir():
+            raise FileNotFoundError(f"Model directory not found: {in_dir}")
+
+        chord_path = in_dir / _CHORD_CHAIN_FILE
+        melody_path = in_dir / _MELODY_CHAIN_FILE
+        meta_path = in_dir / _MODEL_META_FILE
+
+        missing = [
+            path.name
+            for path in (chord_path, melody_path, meta_path)
+            if not path.is_file()
+        ]
+        if missing:
+            raise FileNotFoundError(f"Cannot load model from {in_dir}: missing file(s): {', '.join(missing)}")
+
+        with meta_path.open(encoding="utf-8") as f:
+            meta = json.load(f)
+
+        harmony = ChordChain.load(chord_path)
+        melody = MelodyChain.load(melody_path)
+
+        if harmony.vocab_size != meta.get("chord_vocab_size"):
+            raise ValueError(f"chord_vocab_size mismatch: metadata={meta.get('chord_vocab_size')}, loaded ChordChain={harmony.vocab_size}")
+        if melody.order != meta.get("order"):
+            raise ValueError(f"order mismatch: metadata={meta.get('order')}, loaded MelodyChain={melody.order}")
+        if melody.note_vocab_size != meta.get("note_vocab_size"):
+            raise ValueError(f"note_vocab_size mismatch: metadata={meta.get('note_vocab_size')}, loaded MelodyChain={melody.note_vocab_size}")
+        # return a new HierarchicalMarkovModel with the loaded harmony and melody chains
+        return cls(harmony=harmony, melody=melody)
