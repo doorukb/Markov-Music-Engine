@@ -14,8 +14,8 @@ from typing import List, Mapping, Sequence, Tuple
 import numpy as np
 from config import DEFAULT_N_CHORDS, SUPPORTED_ORDERS
 from markov.encoder import ChordIndex, NoteIndex
-from markov.harmony import ChordChain, EncodeFn, ParseFn, PathLike, UNK_CHORD_INDEX
-from markov.melody import EncodeChordsFn, MelodyChain, NoteState
+from markov.harmony import ChordChain, ParseFn, PathLike, UNK_CHORD_INDEX
+from markov.melody import EncodeChordsFn, MelodyChain
 from markov.parser import ChordToken, NoteToken
 
 Composition = List[Tuple[ChordIndex, List[NoteIndex]]]
@@ -32,23 +32,36 @@ class HierarchicalMarkovModel:
         self.harmony = harmony
         self.melody = melody
 
-    # train both layers on the corpus, then normalize both
-    def train(
-        self,
+    # train both layers in a single pass, then normalize both
+    def train(self,
         paths: Sequence[PathLike],
         parse_fn: ParseFn,
         encode_fn: EncodeChordsFn,
         chord_to_index: Mapping[ChordToken, ChordIndex],
         note_to_index: Mapping[NoteToken, NoteIndex],
     ) -> None:
-        self.harmony.train_corpus(paths, parse_fn, encode_fn, chord_to_index)
-        self.melody.train_corpus(paths, parse_fn, encode_fn, chord_to_index, note_to_index)
+        for path in tqdm(paths, desc = "training the model"):
+           try:
+            chord_sequence, note_sequence = parse_fn(Path(path))
+            chord_ids = encode_fn(chord_sequence, chord_to_index)
+            note_ids = encode_notes(note_sequence, note_to_index)
+            self.harmony.train([chord_ids])
+            self.melody.train(chord_ids, note_ids)
+        except ParseError as exc:
+            logger.warning("skipping %s: %s", path, exc)
+
+        if self.harmony.counts is None or self.harmony.counts.sum() == 0:
+            raise ValueError("no chord transitions accumulated")
+        if not self.melody.counts:
+            raise ValueError("no note transitions accumulated")
         self.harmony.normalize()
         self.melody.normalize()
 
     # sample a chord progression and melody notes per chord
     # return [(chord_index, [note_index, ...]), ...] of length n_chords
     def generate(self, n_chords: int, start_chord: ChordIndex, order: int, notes_per_chord: int = DEFAULT_N_CHORDS) -> Composition:
+        if self.harmony.transition_matrix is None or self.melody.transition_matrices is None:
+            raise RuntimeError("Cannot generate: model has not been trained and normalized.")
         if n_chords < 1:
             raise ValueError(f"n_chords must be at least 1; got {n_chords}")
         if notes_per_chord < 1:
@@ -56,10 +69,7 @@ class HierarchicalMarkovModel:
         if order not in SUPPORTED_ORDERS:
             raise ValueError(f"order must be one of {SUPPORTED_ORDERS}; got {order}")
         if self.melody.order != order:
-            raise ValueError(
-                f"MelodyChain was trained with order={self.melody.order}, "
-                f"but generate() requested order={order}."
-            )
+            raise ValueError(f"MelodyChain was trained with order={self.melody.order}, but generate() requested order={order}.")
         if start_chord == UNK_CHORD_INDEX:
             raise ValueError("start_chord cannot be UNK_CHORD_INDEX.")
 
@@ -102,16 +112,29 @@ class HierarchicalMarkovModel:
 
     # sample notes for a given chord and order 2
     # return a list of note indices of length notes_per_chord
+    def _current_note_after_prev(self, chord_index: ChordIndex, prev_note: NoteIndex) -> NoteIndex:
+        matrix = self.melody.transition_matrices.get(chord_index) if self.melody.transition_matrices else None
+        if matrix is None:
+            raise RuntimeError(f"Cannot generate notes: no transition matrix for chord index {chord_index}.")
+        
+        vocab = self.melody.note_vocab_size
+        row_indices = [prev_note * vocab + current for current in range(vocab)]
+        weights = np.array([matrix[row].sum() for row in row_indices], dtype=np.float64)
+        
+        if weights.sum() <= 0:
+            return self._seed_note_for_chord(chord_index)
+        return int(np.random.choice(np.arange(vocab), p=weights / weights.sum()))
+
     def _sample_notes_order2(self, chord_index: ChordIndex, notes_per_chord: int) -> List[NoteIndex]:
         if notes_per_chord == 1:
             return [self._seed_note_for_chord(chord_index)]
 
         prev_note = self._seed_note_for_chord(chord_index)
-        current = self._seed_note_for_chord(chord_index)
+        current = self._current_note_after_prev(chord_index, prev_note)
         notes = [prev_note, current]
 
         for _ in range(notes_per_chord - 2):
-            state: NoteState = (prev_note, current)
+            state = (prev_note, current)
             next_note = self.melody.sample(chord_index, state)
             notes.append(next_note)
             prev_note, current = current, next_note
@@ -119,10 +142,8 @@ class HierarchicalMarkovModel:
 
     # save the harmony, melody, and metadata under the given directory
     def save(self, directory: PathLike) -> None:
-        if self.harmony.vocab_size is None:
-            raise RuntimeError("Cannot save: ChordChain has not been trained.")
-        if not self.melody.counts:
-            raise RuntimeError("Cannot save: MelodyChain has not been trained.")
+        if self.harmony.transition_matrix is None or self.melody.transition_matrices is None:
+            raise RuntimeError("Cannot save: model has not been trained and normalized.")
 
         out_dir = Path(directory)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -136,9 +157,7 @@ class HierarchicalMarkovModel:
             "note_vocab_size": self.melody.note_vocab_size,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        (out_dir / _MODEL_META_FILE).write_text(
-            json.dumps(meta, indent=2), encoding="utf-8"
-        )
+        (out_dir / _MODEL_META_FILE).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     # load a model saved with save()
     @classmethod
@@ -156,6 +175,7 @@ class HierarchicalMarkovModel:
             for path in (chord_path, melody_path, meta_path)
             if not path.is_file()
         ]
+
         if missing:
             raise FileNotFoundError(f"Cannot load model from {in_dir}: missing file(s): {', '.join(missing)}")
 
