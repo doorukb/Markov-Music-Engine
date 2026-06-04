@@ -1,18 +1,14 @@
-"""
-HierarchicalMarkovModel : composes the harmony and melody layers
-- Provide a single .train(corpus) entry point across both layers
-- Wire ChordChain and MelodyChain together into one model object
-- Apply smoothing post-training across all transition matrices
-- Expose .save() and .load() for full model persistence
-- Act as the single object passed to the generator and analysis modules
-"""
 from __future__ import annotations
 import json
+import logging
+from tqdm import tqdm
+from markov.encoder import encode_notes
+from markov.parser import ParseError
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Mapping, Sequence, Tuple
 import numpy as np
-from config import DEFAULT_N_CHORDS, SUPPORTED_ORDERS
+from config import DEFAULT_N_CHORDS, SMOOTHING_ALPHA, SUPPORTED_ORDERS
 from markov.encoder import ChordIndex, NoteIndex
 from markov.harmony import ChordChain, ParseFn, PathLike, UNK_CHORD_INDEX
 from markov.melody import EncodeChordsFn, MelodyChain
@@ -25,6 +21,7 @@ _MELODY_CHAIN_FILE = "melody_chain.npz"
 _MODEL_META_FILE = "model_meta.json"
 
 __all__ = ["HierarchicalMarkovModel", "Composition"]
+logger = logging.getLogger(__name__)
 
 # hierarchical Markov model to compose the harmony and melody layers
 class HierarchicalMarkovModel:
@@ -40,22 +37,22 @@ class HierarchicalMarkovModel:
         chord_to_index: Mapping[ChordToken, ChordIndex],
         note_to_index: Mapping[NoteToken, NoteIndex],
     ) -> None:
-        for path in tqdm(paths, desc = "training the model"):
-           try:
-            chord_sequence, note_sequence = parse_fn(Path(path))
-            chord_ids = encode_fn(chord_sequence, chord_to_index)
-            note_ids = encode_notes(note_sequence, note_to_index)
-            self.harmony.train([chord_ids])
-            self.melody.train(chord_ids, note_ids)
-        except ParseError as exc:
-            logger.warning("skipping %s: %s", path, exc)
+        for path in tqdm(paths, desc="training the model"):
+            try:
+                chord_sequence, note_sequence = parse_fn(Path(path))
+                chord_ids = encode_fn(chord_sequence, chord_to_index)
+                note_ids = encode_notes(note_sequence, note_to_index)
+                self.harmony.train([chord_ids])
+                self.melody.train(chord_ids, note_ids)
+            except ParseError as exc:
+                logger.warning("skipping %s: %s", path, exc)
 
         if self.harmony.counts is None or self.harmony.counts.sum() == 0:
             raise ValueError("no chord transitions accumulated")
         if not self.melody.counts:
             raise ValueError("no note transitions accumulated")
-        self.harmony.normalize()
-        self.melody.normalize()
+        self.harmony.normalize(alpha=SMOOTHING_ALPHA)
+        self.melody.normalize(alpha=SMOOTHING_ALPHA)
 
     # sample a chord progression and melody notes per chord
     # return [(chord_index, [note_index, ...]), ...] of length n_chords

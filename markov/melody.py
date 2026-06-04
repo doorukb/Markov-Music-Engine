@@ -1,12 +1,3 @@
-"""
-Level 2 : note-level Markov chains conditioned on chord state
-- Maintain one transition matrix per chord state
-- Support order-1 (current note to next note) chains
-- Support order-2 (prev note, current note to next note) chains
-- MLE training from aligned (chord, note) sequence pairs
-- Sample next note given (current note, current chord) context
-- Serialize and deserialize all per-chord matrices
-"""
 from __future__ import annotations
 import logging
 import re
@@ -18,6 +9,7 @@ from config import SUPPORTED_ORDERS
 from markov.encoder import ChordIndex, NOTE_VOCAB_SIZE, NoteIndex, encode_notes
 from markov.harmony import UNK_CHORD_INDEX
 from markov.parser import ChordToken, NoteToken
+from markov.smoothing import laplace_smooth
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +31,8 @@ class MelodyChain:
     # use MelodyChain(order=1) or MelodyChain(order=2) only
     def __init__(self, order: int, note_vocab_size: int = NOTE_VOCAB_SIZE) -> None:
         if order not in (1, 2):
-            raise ValueError(
-                f"MelodyChain only supports order=1 or order=2; got order={order}. "
-                "Use MelodyChain(order=1) or MelodyChain(order=2)."
-            )
+            raise ValueError(f"MelodyChain only supports order=1 or order=2; got order={order}. Use MelodyChain(order=1) or MelodyChain(order=2).")
+    
         self.order = order
         self.note_vocab_size = note_vocab_size
         self._state_rows = note_vocab_size if order == 1 else note_vocab_size * note_vocab_size
@@ -63,26 +53,17 @@ class MelodyChain:
     def _state_row_index(self, state: NoteState) -> int:
         if self.order == 1:
             if isinstance(state, tuple):
-                raise ValueError(
-                    "Cannot use order-2 state (prev_note, current_note) on an "
-                    "order-1 MelodyChain; use MelodyChain(order=2) or pass a single "
-                    "current_note_index."
-                )
+                raise ValueError("cannot use order-2 state (prev_note, current_note) on an order-1 MelodyChain; use MelodyChain(order=2) or pass a single current_note_index.")
             if not isinstance(state, int):
                 raise TypeError("order-1 sample state must be an int (current_note_index)")
             self._validate_note(state, "current_note_index")
             return state
 
         if isinstance(state, int):
-            raise ValueError(
-                "Cannot use order-1 state (current_note_index only) on an "
-                "order-2 MelodyChain; pass (prev_note_index, current_note_index)."
-            )
+            raise ValueError("cannot use order-1 state (current_note_index only) on an order-2 MelodyChain; pass (prev_note_index, current_note_index).")
         if not isinstance(state, tuple) or len(state) != 2:
-            raise TypeError(
-                "order-2 sample state must be a "
-                "(prev_note_index, current_note_index) tuple"
-            )
+            raise TypeError("order-2 sample state must be a (prev_note_index, current_note_index) tuple")
+        
         prev_note, current_note = state
         self._validate_note(prev_note, "prev_note_index")
         self._validate_note(current_note, "current_note_index")
@@ -136,7 +117,7 @@ class MelodyChain:
             matrix = self._matrix_for_chord(chord)
             matrix[state_row, next_note] += 1
 
-    # train the courpus
+    # train the corpus
     # parse and encode each MIDI file; accumulate counts (no normalization)
     def train_corpus(
         self,
@@ -163,7 +144,7 @@ class MelodyChain:
             raise ValueError("Cannot train on an empty corpus: no note transitions were accumulated.")
 
     # row-normalize every per-chord count matrix into transition_matrices
-    def normalize(self) -> None:
+    def normalize(self, alpha: float = 0.0) -> None:
         if not self.counts:
             raise RuntimeError("Cannot normalize: train MelodyChain before normalizing.")
         if sum(matrix.sum() for matrix in self.counts.values()) == 0:
@@ -171,14 +152,17 @@ class MelodyChain:
 
         self.transition_matrices = {}
         for chord_index, counts in self.counts.items():
-            row_sums = counts.sum(axis=1, keepdims=True, dtype=np.float64)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                self.transition_matrices[chord_index] = np.divide(
-                    counts,
-                    row_sums,
-                    where=row_sums > 0,
-                    out=np.zeros(counts.shape, dtype=np.float64),
-                )
+            if alpha > 0:
+                self.transition_matrices[chord_index] = laplace_smooth(counts, alpha)
+            else:
+                row_sums = counts.sum(axis=1, keepdims=True, dtype=np.float64)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    self.transition_matrices[chord_index] = np.divide(
+                        counts,
+                        row_sums,
+                        where=row_sums > 0,
+                        out=np.zeros(counts.shape, dtype=np.float64),
+                    )
 
     # sample the next note index given chord context and Markov state
     # order 1: state is current note index
@@ -220,7 +204,6 @@ class MelodyChain:
         if self.transition_matrices is not None:
             for chord_index, matrix in self.transition_matrices.items():
                 arrays[f"transition_{chord_index}"] = matrix
-
         np.savez_compressed(path, **arrays)
 
     # load a MelodyChain saved with save()
@@ -228,7 +211,7 @@ class MelodyChain:
     def load(cls, path: PathLike) -> MelodyChain:
         path = Path(path)
         if not path.is_file():
-            raise FileNotFoundError(f"MelodyChain file not found: {path}")
+            raise FileNotFoundError(f"MelodyChain file not found : {path}")
 
         with np.load(path, allow_pickle=False) as data:
             order = int(data["order"])
@@ -239,18 +222,14 @@ class MelodyChain:
                 counts_match = _COUNTS_KEY.match(key)
                 if counts_match:
                     chord_index = int(counts_match.group(1))
-                    chain.counts[chord_index] = np.asarray(
-                        data[key], dtype=np.int64
-                    )
+                    chain.counts[chord_index] = np.asarray(data[key], dtype=np.int64)
                     continue
                 transition_match = _TRANSITION_KEY.match(key)
                 if transition_match:
                     if chain.transition_matrices is None:
                         chain.transition_matrices = {}
                     chord_index = int(transition_match.group(1))
-                    chain.transition_matrices[chord_index] = np.asarray(
-                        data[key], dtype=np.float64
-                    )
+                    chain.transition_matrices[chord_index] = np.asarray(data[key], dtype=np.float64)
 
         if not chain.counts:
             raise ValueError(f"No per-chord count matrices found in {path}")
