@@ -30,7 +30,7 @@ from markov.encoder import (
     chord_vocabulary_inverse,
     encode_chords,
 )
-from markov.generator import Composer
+from markov.generator import ComparisonResult, Composer, CompositionResult
 from markov.harmony import ChordChain
 from markov.matrix import HierarchicalMarkovModel
 from markov.melody import MelodyChain
@@ -44,7 +44,9 @@ _TOP_STATIONARY_ROWS = 10
 
 # build the command-line parser
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train a hierarchical Markov model, generate music, and export MIDI/WAV.")
+    parser = argparse.ArgumentParser(
+        description="Train a hierarchical Markov model, generate music, and export MIDI/WAV.",
+    )
     parser.add_argument(
         "--style",
         required=True,
@@ -153,7 +155,11 @@ def load_model_bundle(directory: Path) -> tuple[HierarchicalMarkovModel, list[Ch
     return model, index_to_chord
 
 # save a model bundle to a directory
-def save_model_bundle(model: HierarchicalMarkovModel, directory: Path, chord_to_index: dict[ChordToken, int] | None) -> None:
+def save_model_bundle(
+    model: HierarchicalMarkovModel,
+    directory: Path,
+    chord_to_index: dict[ChordToken, int] | None,
+) -> None:
     model.save(directory)
     if chord_to_index is not None:
         _save_chord_vocab(chord_to_index, directory)
@@ -175,6 +181,49 @@ def print_analysis(summary: dict[str, object], *, title: str) -> None:
     if len(ranked) > _TOP_STATIONARY_ROWS:
         print(f"  ... ({len(ranked) - _TOP_STATIONARY_ROWS} more chord(s) omitted)")
 
+# print the comparison analysis of two models
+def print_comparison_analysis(comparison: ComparisonResult, *, style: str) -> None:
+    model1, model2 = comparison.models
+    matrix1 = model1.harmony.transition_matrix
+    matrix2 = model2.harmony.transition_matrix
+    if matrix1 is None or matrix2 is None:
+        raise RuntimeError("Harmony transition matrix is missing after training.")
+
+    summary1 = summarise(matrix1, comparison.index_to_chord)
+    summary2 = summarise(matrix2, comparison.index_to_chord)
+
+    print(f"\n{'=' * 60}")
+    print(f"Side-by-side harmony analysis - {style}")
+    print(f"{'=' * 60}")
+    print(f"{'':24} {'Order 1':>12} {'Order 2':>12}")
+    print(f"{'Chain entropy (bits)':24} {summary1['entropy_bits']:>12.3f} {summary2['entropy_bits']:>12.3f}")
+    print(
+        f"{'Mixing time (steps)':24} "
+        f"{summary1['mixing_time_steps']:>12} "
+        f"{summary2['mixing_time_steps']:>12}"
+    )
+    print(
+        f"{'Dominant chord':24} "
+        f"{str(summary1['dominant_chord']):>12} "
+        f"{str(summary2['dominant_chord']):>12}"
+    )
+    print(
+        f"{'Dominant chord (%)':24} "
+        f"{summary1['dominant_chord_pct']:>11.1f}% "
+        f"{summary2['dominant_chord_pct']:>11.1f}%"
+    )
+
+# render a composition to a MIDI and WAV file
+def render_composition(result: CompositionResult, output_stem: str) -> None:
+    midi_path = render_midi(result, f"{output_stem}.mid")
+    print(f"MIDI written: {midi_path}")
+
+    try:
+        wav_path = render_wav(midi_path, f"{output_stem}.wav")
+        print(f"WAV written:  {wav_path}")
+    except RuntimeError as exc:
+        print(f"WAV skipped:  {exc}", file=sys.stderr)
+
 # run the generation pipeline
 def run_generation(
     model: HierarchicalMarkovModel,
@@ -195,21 +244,67 @@ def run_generation(
         notes_per_chord=notes_per_chord,
         tempo_bpm=tempo_bpm,
     )
-
-    midi_path = render_midi(result, f"{output_stem}.mid")
-    print(f"MIDI written: {midi_path}")
-
-    try:
-        wav_path = render_wav(midi_path, f"{output_stem}.wav")
-        print(f"WAV written:  {wav_path}")
-    except RuntimeError as exc:
-        print(f"WAV skipped:  {exc}", file=sys.stderr)
+    render_composition(result, output_stem)
 
     matrix = model.harmony.transition_matrix
     if matrix is None:
         raise RuntimeError("Harmony transition matrix is missing after training.")
-    print_analysis(summarise(matrix, index_to_chord), title=f"Harmony analysis - {style}, order {order}")
+    print_analysis(
+        summarise(matrix, index_to_chord),
+        title=f"Harmony analysis - {style}, order {order}",
+    )
 
+# run the comparison pipeline
+def run_compare(
+    *,
+    style: str,
+    n_chords: int,
+    notes_per_chord: int,
+    tempo_bpm: int,
+    corpus_paths: Sequence[Path],
+    load_model: Path | None,
+    save_model: Path | None,
+) -> int:
+    models: tuple[HierarchicalMarkovModel, HierarchicalMarkovModel] | None = None
+    index_to_chord: list[ChordToken] | None = None
+    if load_model is not None:
+        dir1 = load_model / "order1"
+        dir2 = load_model / "order2"
+        if not dir1.is_dir() or not dir2.is_dir():
+            print(
+                f"error: compare mode expects {dir1} and {dir2}",
+                file=sys.stderr,
+            )
+            return 1
+        logger.info("Loading models from %s and %s", dir1, dir2)
+        model1, index_to_chord = load_model_bundle(dir1)
+        model2, _ = load_model_bundle(dir2)
+        models = (model1, model2)
+    else:
+        logger.info("Training order-1 and order-2 models on %s file(s)", len(corpus_paths))
+
+    comparison = Composer.compare(
+        style,
+        n_chords,
+        notes_per_chord=notes_per_chord,
+        tempo_bpm=tempo_bpm,
+        corpus_paths=corpus_paths if models is None else None,
+        models=models,
+        index_to_chord=index_to_chord,
+    )
+
+    if save_model is not None and models is None:
+        chord_sequences = _collect_chord_sequences(corpus_paths)
+        chord_to_index = build_chord_vocabulary(chord_sequences)
+        for order, model in zip((1, 2), comparison.models, strict=True):
+            save_dir = save_model / f"order{order}"
+            logger.info("Saving model to %s", save_dir)
+            save_model_bundle(model, save_dir, chord_to_index)
+
+    render_composition(comparison.order1, f"{style}_order1")
+    render_composition(comparison.order2, f"{style}_order2")
+    print_comparison_analysis(comparison, style=style)
+    return 0
 
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -226,43 +321,50 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    orders = [1, 2] if args.compare else [args.order]
     corpus_paths = load_corpus(args.style)
 
-    # train or load the model for each order
-    for order in orders:
-        if args.load_model is not None:
-            model_dir = args.load_model / f"order{order}" if args.compare else args.load_model
-            if not model_dir.is_dir():
-                print(f"error: model directory not found: {model_dir}", file=sys.stderr)
-                return 1
-            logger.info("Loading model from %s", model_dir)
-            model, index_to_chord = load_model_bundle(model_dir)
-            chord_to_index = None
-        else:
-            logger.info("Training model (order=%s) on %s file(s)", order, len(corpus_paths))
-            model, index_to_chord, chord_to_index = train_model(corpus_paths, order)
-            if args.save_model is not None:
-                save_dir = args.save_model / f"order{order}" if args.compare else args.save_model
-                logger.info("Saving model to %s", save_dir)
-                save_model_bundle(model, save_dir, chord_to_index)
-
-        if model.melody.order != order:
-            print(f"error: loaded melody order is {model.melody.order}, but run requested order {order}", file=sys.stderr)
-            return 1
-
-        output_stem = f"{args.style}_order{order}"
-        run_generation(
-            model,
-            index_to_chord,
+    if args.compare:
+        return run_compare(
             style=args.style,
-            order=order,
             n_chords=args.n_chords,
             notes_per_chord=args.notes_per_chord,
             tempo_bpm=args.tempo,
-            output_stem=output_stem,
+            corpus_paths=corpus_paths,
+            load_model=args.load_model,
+            save_model=args.save_model,
         )
+
+    if args.load_model is not None:
+        if not args.load_model.is_dir():
+            print(f"error: model directory not found: {args.load_model}", file=sys.stderr)
+            return 1
+        logger.info("Loading model from %s", args.load_model)
+        model, index_to_chord = load_model_bundle(args.load_model)
+        chord_to_index = None
+    else:
+        logger.info("Training model (order=%s) on %s file(s)", args.order, len(corpus_paths))
+        model, index_to_chord, chord_to_index = train_model(corpus_paths, args.order)
+        if args.save_model is not None:
+            logger.info("Saving model to %s", args.save_model)
+            save_model_bundle(model, args.save_model, chord_to_index)
+
+    if model.melody.order != args.order:
+        print(
+            f"error: loaded melody order is {model.melody.order}, but run requested order {args.order}",
+            file=sys.stderr,
+        )
+        return 1
+
+    run_generation(
+        model,
+        index_to_chord,
+        style=args.style,
+        order=args.order,
+        n_chords=args.n_chords,
+        notes_per_chord=args.notes_per_chord,
+        tempo_bpm=args.tempo,
+        output_stem=f"{args.style}_order{args.order}",
+    )
     return 0
 
 if __name__ == "__main__":
