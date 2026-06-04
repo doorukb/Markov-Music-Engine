@@ -32,15 +32,15 @@ class HierarchicalMarkovModel:
         chord_to_index: Mapping[ChordToken, ChordIndex],
         note_to_index: Mapping[NoteToken, NoteIndex],
     ) -> None:
-        for path in tqdm(paths, desc = "training the model"):
-           try:
-            chord_sequence, note_sequence = parse_fn(Path(path))
-            chord_ids = encode_fn(chord_sequence, chord_to_index)
-            note_ids = encode_notes(note_sequence, note_to_index)
-            self.harmony.train([chord_ids])
-            self.melody.train(chord_ids, note_ids)
-        except ParseError as exc:
-            logger.warning("skipping %s: %s", path, exc)
+        for path in tqdm(paths, desc="training the model"):
+            try:
+                chord_sequence, note_sequence = parse_fn(Path(path))
+                chord_ids = encode_fn(chord_sequence, chord_to_index)
+                note_ids = encode_notes(note_sequence, note_to_index)
+                self.harmony.train([chord_ids])
+                self.melody.train(chord_ids, note_ids)
+            except ParseError as exc:
+                logger.warning("skipping %s: %s", path, exc)
 
         if self.harmony.counts is None or self.harmony.counts.sum() == 0:
             raise ValueError("no chord transitions accumulated")

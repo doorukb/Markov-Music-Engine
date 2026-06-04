@@ -117,7 +117,7 @@ class MelodyChain:
             matrix = self._matrix_for_chord(chord)
             matrix[state_row, next_note] += 1
 
-    # train the courpus
+    # train the corpus
     # parse and encode each MIDI file; accumulate counts (no normalization)
     def train_corpus(
         self,
