@@ -1,10 +1,4 @@
-"""
-data loading and MIDI dataset management
-- Download and organize the Nottingham MIDI dataset
-- Expose music21's built-in corpus (Bach chorales, etc.)
-- Map style names (classical, jazz, pop) to lists of MIDI file paths
-- Provide a single load_corpus(style) → List[Path] interface
-"""
+# download and unzip the nottingham MIDI dataset into data/raw/nottingham/
 import urllib.request
 import zipfile
 import logging
@@ -14,10 +8,13 @@ from music21 import corpus
 from config import DATA_RAW_DIR, SUPPORTED_STYLES
 
 logger = logging.getLogger(__name__)
-NOTTINGHAM_URL = (
-    "https://github.com/jukedeck/nottingham-dataset/archive/refs/heads/master.zip"
-)
+
+# special thanks to jukedeck for the nottingham MIDI dataset
+NOTTINGHAM_URL = ("https://github.com/jukedeck/nottingham-dataset/archive/refs/heads/master.zip")
+# path to the nottingham MIDI dataset
 NOTTINGHAM_DIR = DATA_RAW_DIR / "nottingham"
+
+# mapping the nottingham MIDI dataset to the style names
 NOTTINGHAM_STYLE_MAP = {
     "classical": "ashover",
     "pop":       "reels",
