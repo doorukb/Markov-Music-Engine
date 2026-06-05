@@ -16,7 +16,9 @@ NOTTINGHAM_URL = ("https://github.com/jukedeck/nottingham-dataset/archive/refs/h
 # path to the nottingham MIDI dataset
 NOTTINGHAM_DIR = DATA_RAW_DIR / "nottingham"
 
-# mapping the nottingham MIDI dataset to the style names
+# mapping each style to the Nottingham MIDI filename prefix.
+# Files live flat under MIDI/ as <prefix><number>.mid (e.g. ashover1.mid, jigs12.mid,
+# reelsa-c1.mid), so styles are selected by filename prefix rather than by subfolder.
 NOTTINGHAM_STYLE_MAP = {
     "classical": "ashover",
     "pop":       "reels",
@@ -48,22 +50,24 @@ def download_nottingham() -> None:
     if extracted.exists():
         extracted.rename(NOTTINGHAM_DIR)
 
-    zip_path.unlink()
+    zip_path.unlink(missing_ok=True)
     logger.info(f"Nottingham dataset ready at {NOTTINGHAM_DIR}")
 
 # download the dataset and return all .mid file paths for a given style from the nottingham
 def _load_nottingham_paths(style: str) -> List[Path]:
     download_nottingham()
 
-    subfolder = NOTTINGHAM_STYLE_MAP.get(style)
-    if subfolder is None:
+    prefix = NOTTINGHAM_STYLE_MAP.get(style)
+    if prefix is None:
         raise ValueError(f"unknown style : '{style}'. Choose from {SUPPORTED_STYLES}.")
 
-    midi_dir = NOTTINGHAM_DIR / "MIDI" / subfolder
-    if not midi_dir.exists():
-        raise FileNotFoundError(f"expected Nottingham subfolder not found: {midi_dir}\ntry deleting {NOTTINGHAM_DIR} and re-running to re-download.")
+    midi_dir = NOTTINGHAM_DIR / "MIDI"
+    if not midi_dir.is_dir():
+        raise FileNotFoundError(f"expected Nottingham MIDI directory not found: {midi_dir}\ntry deleting {NOTTINGHAM_DIR} and re-running to re-download.")
 
-    paths = sorted(midi_dir.glob("*.mid"))
+    paths = sorted(midi_dir.glob(f"{prefix}*.mid"))
+    if not paths:
+        raise FileNotFoundError(f"no Nottingham MIDI files with prefix {prefix!r} under {midi_dir}\ntry deleting {NOTTINGHAM_DIR} and re-running to re-download.")
     logger.info(f"Nottingham [{style}]: {len(paths)} files found.")
     return paths
 

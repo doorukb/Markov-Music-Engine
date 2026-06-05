@@ -78,10 +78,9 @@ from config import (
 )
 from markov.analysis import summarise
 from markov.data import collect_chord_sequences, load_corpus
-from markov.encoder import ChordToken, build_chord_vocabulary, encode_chords
+from markov.encoder import ChordToken, build_chord_vocabulary
 from markov.generator import Composer, CompositionResult, MultiOrderResult
 from markov.matrix import HierarchicalMarkovModel
-from markov.parser import ParseError, parse_midi
 from markov.playback import (
     composition_duration_seconds,
     export_original_midi,
@@ -346,7 +345,7 @@ def run_generation(
     print_analysis(summarise(matrix, index_to_chord), title=f"Harmony analysis - {style}, order {order}")
     return midi_path, result
 
-# run multi-order generation (generalizes former run_compare)
+# run multi-order generation for one or more melody orders
 def run_orders(
     orders: Sequence[int], # the orders to use for generation
     *, # the following parameters are used for generation
@@ -407,32 +406,6 @@ def run_orders(
             tracks.append((f"{style} order {order}", midi_paths[order], composition_duration_seconds(result)))
         _play_sequence(tracks)
     return 0
-
-# run a comparison of order-1 and order-2
-def run_compare(
-    *, # the following parameters are used for generation
-    style: str, # the style to use for generation
-    n_chords: int, # the number of chords to generate
-    notes_per_chord: int, # the number of notes to generate per chord
-    tempo_bpm: int, # the tempo to use for generation
-    training_paths: Sequence[Path], # the paths to the training data
-    source_piece: Path, # the path to the source piece
-    load_model: Path | None, # the path to the model to load
-    save_model: Path | None, # the path to save the model
-    play: bool = False, # whether to play the generated music
-) -> int:
-    return run_orders(
-        [1, 2],
-        style=style,
-        n_chords=n_chords,
-        notes_per_chord=notes_per_chord,
-        tempo_bpm=tempo_bpm,
-        training_paths=training_paths,
-        source_piece=source_piece,
-        load_model=load_model,
-        save_model=save_model,
-        play=play,
-    )
 
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

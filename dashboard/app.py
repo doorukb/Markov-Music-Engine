@@ -1,5 +1,4 @@
 from __future__ import annotations
-import random
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -41,6 +40,8 @@ from visualization.plots import (  # noqa: E402
     shared_top_chord_indices,
 )
 
+_TOP_STATIONARY_ROWS = 10
+
 _MELODY_MODES: dict[str, list[int]] = {
     "Order 1": [1],
     "Order 2": [2],
@@ -56,7 +57,6 @@ _SESSION_DEFAULTS: dict[str, object] = {
     "source_piece": None,
     "last_result": None,
     "last_audio": None,
-    "last_original_audio": None,
     "playback_tracks": None,
     "soundfont_ready": False,
 }
@@ -225,7 +225,6 @@ def _render_order_column(
     result: CompositionResult, # the result to render
     model: HierarchicalMarkovModel, # the model to use for generation
     summary: dict, # the summary to render
-    audio: PreparedAudio, # the audio to render
     index_to_chord: Sequence[ChordToken], # the mapping of chord indices to chord tokens
     baseline_summary: dict | None, # the baseline summary to render
     chord_indices: Sequence[int] | None, # the chord indices to render
@@ -254,6 +253,21 @@ def _render_order_column(
     )
     st.pyplot(fig_stationary)
     plt.close(fig_stationary)
+
+    with st.expander("Stationary distribution (numeric)"):
+        ranked = sorted(
+            summary["stationary_distribution"].items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:_TOP_STATIONARY_ROWS]
+        st.dataframe(
+            {
+                "Chord": [chord for chord, _ in ranked],
+                "Long-run probability": [round(float(prob), 4) for _, prob in ranked],
+            },
+            hide_index=True,
+            use_container_width=True,
+        )
 
     st.caption(
         f"{result.metadata.get('n_chords')} chords, "
@@ -285,7 +299,6 @@ def _render_analysis(last_result: MultiOrderResult) -> None:
         for col, order in zip(columns, orders):
             result = next(r for o, r, _ in last_result.results if o == order)
             model = next(m for o, _, m in last_result.results if o == order)
-            audio = st.session_state.last_audio[order]
             with col:
                 _render_order_column(
                     order=order,
@@ -293,7 +306,6 @@ def _render_analysis(last_result: MultiOrderResult) -> None:
                     result=result,
                     model=model,
                     summary=summaries[order],
-                    audio=audio,
                     index_to_chord=index_to_chord,
                     baseline_summary=baseline if order != 1 else None,
                     chord_indices=chord_indices,
@@ -301,14 +313,12 @@ def _render_analysis(last_result: MultiOrderResult) -> None:
                 )
     else:
         order, result, model = last_result.results[0]
-        audio = st.session_state.last_audio[order]
         _render_order_column(
             order=order,
             style=style,
             result=result,
             model=model,
             summary=summaries[order],
-            audio=audio,
             index_to_chord=index_to_chord,
             baseline_summary=None,
             chord_indices=None,
@@ -322,24 +332,87 @@ def _render_results() -> None:
     tracks: list[PlaybackTrack] | None = st.session_state.playback_tracks
 
     if last_result is None or last_audio is None or tracks is None:
-        st.info("Configure the sidebar and click **Generate** to create music.")
+        st.info(
+            "Configure the run in the sidebar and click **Generate**. "
+            "Tip: enable **Single source** to train on one piece so the Original and the "
+            "generated orders are directly comparable."
+        )
         return
-
-    _render_analysis(last_result)
-    render_playback_studio(tracks)
 
     source = st.session_state.get("source_piece")
     if source is not None:
         st.caption(f"Source piece: `{Path(source).name}`")
 
+    st.subheader("📊 Harmony analysis")
+    _render_analysis(last_result)
+    st.divider()
+    render_playback_studio(tracks)
+
+
+_CUSTOM_CSS = """
+<style>
+.block-container { padding-top: 2.2rem; max-width: 1500px; }
+#mme-hero {
+  background: linear-gradient(135deg, #1A1530 0%, #161A23 55%, #101622 100%);
+  border: 1px solid #2A2F3C;
+  border-radius: 16px;
+  padding: 1.4rem 1.6rem;
+  margin-bottom: 1.4rem;
+}
+#mme-hero h1 {
+  margin: 0; font-size: 2.0rem; font-weight: 800; letter-spacing: -0.02em;
+  background: linear-gradient(90deg, #B7A6FF, #7C5CFF);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+#mme-hero p { margin: 0.4rem 0 0; color: #9A9AB5; font-size: 0.98rem; max-width: 70ch; }
+#mme-hero .mme-chips { margin-top: 0.9rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+#mme-hero .chip {
+  font-size: 0.78rem; font-weight: 600; padding: 0.25rem 0.7rem; border-radius: 999px;
+  border: 1px solid #2A2F3C; color: #CFCFE8; background: #1B1F2A;
+}
+#mme-hero .chip.ok { color: #6BE3A6; border-color: #1F4A37; background: #122A20; }
+#mme-hero .chip.warn { color: #F4C77B; border-color: #4A3A1F; background: #2A2112; }
+section[data-testid="stSidebar"] h2 { font-size: 1.05rem; }
+div[data-testid="stMetric"] {
+  background: #161A23; border: 1px solid #2A2F3C; border-radius: 12px;
+  padding: 0.7rem 0.9rem;
+}
+</style>
+"""
+
+
+# render the hero header with title, pitch, and audio-readiness chips
+def _render_hero(audio_ready: bool) -> None:
+    chip_cls = "chip ok" if audio_ready else "chip warn"
+    chip_text = "Audio ready" if audio_ready else "Audio: first-run setup"
+    st.markdown(
+        f"""
+<div id="mme-hero">
+  <h1>Markov Music Engine</h1>
+  <p>A hierarchical Markov chain that learns harmony and melody from a MIDI corpus and
+     generates new, stylistically coherent pieces — with the full statistical analysis
+     layer exposed. Everything the CLI does, in your browser.</p>
+  <div class="mme-chips">
+    <span class="chip">Harmony + melody chains</span>
+    <span class="chip">Orders 1 · 2 · 3</span>
+    <span class="chip">Stationary · entropy · mixing time</span>
+    <span class="{chip_cls}">{chip_text}</span>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
 
 def main() -> None:
     st.set_page_config(
         page_title="Markov Music Engine",
+        page_icon="🎵",
         layout="wide",
         initial_sidebar_state="expanded",
     )
     _init_session_state()
+    st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
 
     if not st.session_state.soundfont_ready:
         try:
@@ -348,32 +421,32 @@ def main() -> None:
         except Exception as exc:
             st.sidebar.warning(f"Audio setup: {exc}")
 
-    st.title("Markov Music Engine")
-    st.caption("Interactive dashboard with the same capabilities as the CLI — train, generate, analyze, and play.")
+    _render_hero(bool(st.session_state.soundfont_ready))
 
     with st.sidebar:
-        st.header("Generation")
-        style = st.selectbox("Style", SUPPORTED_STYLES, index=0)
+        st.header("🎛️ Generation")
+        style = st.selectbox("Style", SUPPORTED_STYLES, index=0, help="Corpus/style to train on (CLI --style).")
 
         melody_mode = st.radio(
             "Melody mode",
             list(_MELODY_MODES.keys()),
             index=2,
+            help="Maps to CLI --order / --orders / --compare.",
         )
+        confirm_order3 = False
         if ORDER3_WARNING_THRESHOLD in _MELODY_MODES[melody_mode]:
             st.caption(ORDER3_RESOURCE_MESSAGE.strip())
-        confirm_order3 = st.checkbox(
-            "Proceed with order 3 (high resource use)",
-            value=False,
-            help="Equivalent to CLI --yes for order-3 runs.",
-        )
+            confirm_order3 = st.checkbox(
+                "Proceed with order 3 (high resource use)",
+                value=False,
+                help="Equivalent to CLI --yes for order-3 runs.",
+            )
 
         st.subheader("Piece length")
         length_mode = st.radio("Length mode", ["Chord count", "Target duration"], index=0)
         tempo_bpm = st.slider("Tempo (BPM)", 40, 220, DEFAULT_TEMPO_BPM)
         if length_mode == "Chord count":
             n_chords = st.slider("Number of chords", 1, 64, DEFAULT_N_CHORDS)
-            duration_seconds: float | None = None
         else:
             duration_seconds = st.slider("Target duration (seconds)", 5.0, 180.0, 30.0, 1.0)
             n_chords = seconds_to_n_chords(duration_seconds, tempo_bpm)
@@ -389,9 +462,9 @@ def main() -> None:
             help="Leave empty for a random piece from the selected style.",
         )
 
-        st.subheader("Model I/O")
-        load_model_text = st.text_input("Load model directory (--load-model)", value="")
-        save_model_text = st.text_input("Save model directory (--save-model)", value="")
+        with st.expander("Model I/O (--save-model / --load-model)", expanded=False):
+            load_model_text = st.text_input("Load model directory", value="")
+            save_model_text = st.text_input("Save model directory", value="")
 
         st.divider()
         generate = st.button("Generate", type="primary", use_container_width=True)
@@ -419,7 +492,6 @@ def main() -> None:
                 )
             st.session_state.last_result = multi
             st.session_state.last_audio = audio_by_order
-            st.session_state.last_original_audio = original
             st.session_state.playback_tracks = _build_playback_tracks(original, audio_by_order, style)
             st.toast("Generation complete.")
         except Exception as exc:

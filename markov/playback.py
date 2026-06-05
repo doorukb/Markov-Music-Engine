@@ -112,7 +112,8 @@ def _load_index_to_chord(directory: Path, vocab_size: int) -> list[ChordToken]:
 # load a model bundle from a directory
 def load_model_bundle(directory: Path) -> tuple[HierarchicalMarkovModel, list[ChordToken]]:
     model = HierarchicalMarkovModel.load(directory)
-    assert model.harmony.vocab_size is not None
+    if model.harmony.vocab_size is None:
+        raise RuntimeError(f"Loaded model at {directory} has no harmony vocabulary size.")
     index_to_chord = _load_index_to_chord(directory, model.harmony.vocab_size)
     return model, index_to_chord
 
@@ -136,5 +137,6 @@ def load_models_for_orders(load_model: Path, orders: Sequence[int]) -> tuple[dic
         models[order] = model
         if index_to_chord is None:
             index_to_chord = loaded_index
-    assert index_to_chord is not None
+    if index_to_chord is None:
+        raise ValueError("load_models_for_orders() requires at least one order.")
     return models, index_to_chord

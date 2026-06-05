@@ -1,0 +1,11 @@
+services:
+  web:
+    build: .
+    image: markov-music-engine
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persist generated audio and downloaded assets (soundfont, datasets)
+      # across container restarts.
+      - ./outputs:/app/outputs
+      - ./data:/app/data

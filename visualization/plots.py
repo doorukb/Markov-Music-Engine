@@ -12,7 +12,6 @@ __all__ = [
     "plot_transition_matrix",
     "plot_stationary_distribution",
     "plot_metrics_panel",
-    "plot_metrics_panels",
     "shared_top_chord_indices",
 ]
 
@@ -116,26 +115,6 @@ def plot_metrics_panel(summary: SummaryDict, order: int, *, baseline: SummaryDic
         st.metric("Chain entropy (bits)", f"{float(summary['entropy_bits']):.3f}", delta=f"{entropy_delta:+.3f}" if entropy_delta is not None else None, delta_color="normal")
     with col_mixing:
         st.metric("Mixing time (steps)", str(int(summary["mixing_time_steps"])), delta=f"{mixing_delta:+d}" if mixing_delta is not None else None, delta_color="normal")
-
-# render harmony metrics for one or more melody orders
-# Displays one or more three-column metric rows, one per order, with order-2 deltas vs order-1 if provided
-# Single-order : one three-column row. Comparison mode: one row per order; order 2 shows entropy and mixing-time deltas relative to order 1.
-def plot_metrics_panels(summaries_by_order: Mapping[int, SummaryDict]) -> None:
-    if not summaries_by_order:
-        raise ValueError("summaries_by_order must not be empty")
-
-    orders = sorted(summaries_by_order)
-    compare = len(orders) > 1
-    baseline = summaries_by_order.get(1) if compare and 1 in summaries_by_order else None
-
-    for order in orders:
-        if compare:
-            st.markdown(f"**Order {order}**")
-        plot_metrics_panel(
-            summaries_by_order[order],
-            order,
-            baseline=baseline if compare and order != 1 and baseline is not None else None,
-        )
 
 # render the stationary distribution as a horizontal bar chart
 # Shows the top chords by long-run probability (capped at 15), sorted descending, with percentage labels on each bar
