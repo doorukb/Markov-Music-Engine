@@ -62,9 +62,7 @@ loading order 3, the CLI prints a resource warning and asks [y/N] unless --yes i
 """
 from __future__ import annotations
 import argparse
-import json
 import logging
-import random
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -79,64 +77,26 @@ from config import (
     SUPPORTED_STYLES,
 )
 from markov.analysis import summarise
-from markov.data import load_corpus
-from markov.encoder import (
-    ChordToken,
-    build_chord_vocabulary,
-    build_note_vocabulary,
-    chord_vocabulary_inverse,
-    encode_chords,
-)
+from markov.data import collect_chord_sequences, load_corpus
+from markov.encoder import ChordToken, build_chord_vocabulary, encode_chords
 from markov.generator import Composer, CompositionResult, MultiOrderResult
-from markov.harmony import ChordChain
 from markov.matrix import HierarchicalMarkovModel
-from markov.melody import MelodyChain
 from markov.parser import ParseError, parse_midi
+from markov.playback import (
+    composition_duration_seconds,
+    export_original_midi,
+    load_model_bundle,
+    load_models_for_orders,
+    resolve_source,
+    save_model_bundle,
+    seconds_to_n_chords,
+)
+from markov.training import train_model
 from markov.renderer import render_midi, render_wav
 
 logger = logging.getLogger(__name__)
 
-_CHORD_VOCAB_FILE = "chord_vocab.json"
 _TOP_STATIONARY_ROWS = 10
-_MEASURE_QUARTER_LENGTH = 4.0
-
-# one chord = one 4/4 measure = 240/tempo seconds
-def _seconds_to_n_chords(seconds: float, tempo_bpm: int) -> int:
-    return max(1, round(seconds * tempo_bpm / (_MEASURE_QUARTER_LENGTH * 60.0)))
-
-# calculate the duration of a composition in seconds
-def _composition_duration_seconds(result: CompositionResult) -> float:
-    return len(result.composition) * _MEASURE_QUARTER_LENGTH * 60.0 / result.tempo_bpm
-
-# measure duration from the written MIDI file pygame actually plays
-def _midi_file_duration_seconds(path: Path, *, tempo_bpm: int = DEFAULT_TEMPO_BPM) -> float:
-    from music21 import converter
-
-    if not path.is_file():
-        return 60.0
-    try:
-        score = converter.parse(str(path))
-    except Exception:
-        return 60.0
-    seconds = getattr(score, "seconds", None)
-    if seconds and seconds > 0 and not (isinstance(seconds, float) and seconds != seconds):
-        return float(seconds)
-    return float(score.duration.quarterLength) * 60.0 / tempo_bpm
-
-def _resolve_source(source_arg: str | None, style: str, corpus_paths: Sequence[Path]) -> Path:
-    if not source_arg:
-        return random.choice(list(corpus_paths))
-    p = Path(source_arg)
-    if p.is_file():
-        return p
-    if source_arg in SUPPORTED_STYLES:
-        return random.choice(load_corpus(source_arg))
-    logger.warning(
-        "--source %r is not a file or known style; using a random %s piece.",
-        source_arg,
-        style,
-    )
-    return random.choice(list(corpus_paths))
 
 # resolve the effective orders to generate
 def _resolve_effective_orders(args: argparse.Namespace) -> list[int]:
@@ -159,38 +119,6 @@ def _confirm_order3(orders: Sequence[int], yes: bool) -> bool:
         return True
     print("Aborted: order-3 generation cancelled.")
     return False
-
-def _resolve_playback_score(source_path: Path):
-    from music21 import converter, stream
-
-    parsed = converter.parse(str(source_path))
-    if isinstance(parsed, stream.Opus):
-        if not parsed.scores:
-            raise RuntimeError(f"No scores found in opus file: {source_path}")
-        return parsed.scores[0]
-    return parsed
-
-# export the original MIDI source file to a MIDI file
-def _export_original_midi(source_path: Path, output_stem: str) -> tuple[Path, float]:
-    import shutil
-    from music21.exceptions21 import StreamException
-
-    midi_path = OUTPUTS_DIR / f"{output_stem}.mid"
-    if source_path.suffix.lower() in {".mid", ".midi"} and source_path.is_file():
-        shutil.copy2(source_path, midi_path)
-    else:
-        score = _resolve_playback_score(source_path)
-        try:
-            score.write("midi", str(midi_path))
-        except StreamException:
-            if score.parts:
-                score.parts[0].write("midi", str(midi_path))
-            else:
-                score.flatten().write("midi", str(midi_path))
-    if not midi_path.is_file():
-        raise RuntimeError(f"Failed to write playback MIDI: {midi_path}")
-    print(f"Original MIDI written: {midi_path}")
-    return midi_path, _midi_file_duration_seconds(midi_path)
 
 # play a MIDI file with progress bars
 def play_midi_with_progress(path: Path, label: str, duration_seconds: float) -> None:
@@ -231,14 +159,12 @@ def play_midi_with_progress(path: Path, label: str, duration_seconds: float) -> 
 # play a sequence of MIDI files with progress bars
 def _play_sequence(tracks: list[tuple[str, Path, float]]) -> None:
     import pygame
-
     pygame.mixer.init()
     try:
         for label, path, duration in tracks:
             play_midi_with_progress(path, label, duration)
     finally:
         pygame.mixer.quit()
-
 
 # build the command-line parser
 def _build_parser() -> argparse.ArgumentParser:
@@ -335,66 +261,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-# save the chord vocabulary to a file
-def _save_chord_vocab(chord_to_index: dict[ChordToken, int], directory: Path) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / _CHORD_VOCAB_FILE).write_text(
-        json.dumps(chord_to_index, indent=2),
-        encoding="utf-8",
-    )
-
-# load the chord vocabulary from a file
-def _load_index_to_chord(directory: Path, vocab_size: int) -> list[ChordToken]:
-    vocab_path = directory / _CHORD_VOCAB_FILE
-    if vocab_path.is_file():
-        chord_to_index: dict[str, int] = json.loads(vocab_path.read_text(encoding="utf-8"))
-        return chord_vocabulary_inverse(chord_to_index)
-    return [f"chord_{i}" for i in range(vocab_size)]
-
-# collect chord sequences from a list of MIDI files
-def _collect_chord_sequences(paths: Sequence[Path]) -> list[list[ChordToken]]:
-    sequences: list[list[ChordToken]] = []
-    for path in paths:
-        try:
-            chord_sequence, _ = parse_midi(path)
-            sequences.append(chord_sequence)
-        except ParseError as exc:
-            logger.warning("skipping %s: %s", path, exc)
-    return sequences
-
-# train the model on a list of MIDI files
-def train_model(paths: Sequence[Path], order: int) -> tuple[HierarchicalMarkovModel, list[ChordToken], dict[ChordToken, int]]:
-    chord_sequences = _collect_chord_sequences(paths)
-    if not chord_sequences:
-        raise RuntimeError("No chord sequences could be parsed from the corpus.")
-
-    chord_to_index = build_chord_vocabulary(chord_sequences)
-    index_to_chord = chord_vocabulary_inverse(chord_to_index)
-    note_to_index = build_note_vocabulary()
-
-    harmony = ChordChain(vocab_size=len(chord_to_index))
-    melody = MelodyChain(order=order)
-    model = HierarchicalMarkovModel(harmony=harmony, melody=melody)
-    model.train(paths, parse_midi, encode_chords, chord_to_index, note_to_index)
-    return model, index_to_chord, chord_to_index
-
-# load a model bundle from a directory
-def load_model_bundle(directory: Path) -> tuple[HierarchicalMarkovModel, list[ChordToken]]:
-    model = HierarchicalMarkovModel.load(directory)
-    assert model.harmony.vocab_size is not None
-    index_to_chord = _load_index_to_chord(directory, model.harmony.vocab_size)
-    return model, index_to_chord
-
-# save a model bundle to a directory
-def save_model_bundle(
-    model: HierarchicalMarkovModel,
-    directory: Path,
-    chord_to_index: dict[ChordToken, int] | None,
-) -> None:
-    model.save(directory)
-    if chord_to_index is not None:
-        _save_chord_vocab(chord_to_index, directory)
-
 # print the analysis of a chord transition matrix
 def print_analysis(summary: dict[str, object], *, title: str) -> None:
     print(f"\n{'=' * 60}")
@@ -451,16 +317,18 @@ def render_composition(result: CompositionResult, output_stem: str) -> Path:
     return midi_path
 
 # run the generation pipeline
+# composes a melody using the model and renders it to a MIDI and WAV file
+# returns the path to the MIDI and WAV files
 def run_generation(
-    model: HierarchicalMarkovModel,
-    index_to_chord: Sequence[ChordToken],
-    *,
-    style: str,
-    order: int,
-    n_chords: int,
-    notes_per_chord: int,
-    tempo_bpm: int,
-    output_stem: str,
+    model: HierarchicalMarkovModel, # the model to use for generation
+    index_to_chord: Sequence[ChordToken], # the mapping of chord indices to chord tokens
+    *, # the following parameters are used for generation
+    style: str, # the style to use for generation
+    order: int, # the order to use for generation
+    n_chords: int, # the number of chords to generate
+    notes_per_chord: int, # the number of notes to generate per chord
+    tempo_bpm: int, # the tempo to use for generation
+    output_stem: str, # the stem to use for the output files
 ) -> tuple[Path, CompositionResult]:
     composer = Composer(model)
     result = composer.compose(
@@ -475,49 +343,22 @@ def run_generation(
     matrix = model.harmony.transition_matrix
     if matrix is None:
         raise RuntimeError("Harmony transition matrix is missing after training.")
-    print_analysis(
-        summarise(matrix, index_to_chord),
-        title=f"Harmony analysis - {style}, order {order}",
-    )
+    print_analysis(summarise(matrix, index_to_chord), title=f"Harmony analysis - {style}, order {order}")
     return midi_path, result
-
-# load the models for a given set of orders
-def _load_models_for_orders(load_model: Path, orders: Sequence[int]) -> tuple[dict[int, HierarchicalMarkovModel], list[ChordToken]]:
-    models: dict[int, HierarchicalMarkovModel] = {}
-    index_to_chord: list[ChordToken] | None = None
-    for order in orders:
-        order_dir = load_model / f"order{order}"
-        if not order_dir.is_dir():
-            print(
-                f"error: multi-order load expects {order_dir}",
-                file=sys.stderr,
-            )
-            raise FileNotFoundError(str(order_dir))
-        logger.info("Loading model from %s", order_dir)
-        model, loaded_index = load_model_bundle(order_dir)
-        if model.melody.order != order:
-            raise ValueError(
-                f"loaded model at {order_dir} has melody order {model.melody.order}, expected {order}"
-            )
-        models[order] = model
-        if index_to_chord is None:
-            index_to_chord = loaded_index
-    assert index_to_chord is not None
-    return models, index_to_chord
 
 # run multi-order generation (generalizes former run_compare)
 def run_orders(
-    orders: Sequence[int],
-    *,
-    style: str,
-    n_chords: int,
-    notes_per_chord: int,
-    tempo_bpm: int,
-    training_paths: Sequence[Path],
-    source_piece: Path,
-    load_model: Path | None,
-    save_model: Path | None,
-    play: bool = False,
+    orders: Sequence[int], # the orders to use for generation
+    *, # the following parameters are used for generation
+    style: str, # the style to use for generation
+    n_chords: int, # the number of chords to generate
+    notes_per_chord: int, # the number of notes to generate per chord
+    tempo_bpm: int, # the tempo to use for generation
+    training_paths: Sequence[Path], # the paths to the training data
+    source_piece: Path, # the path to the source piece
+    load_model: Path | None, # the path to the model to load
+    save_model: Path | None, # the path to save the model
+    play: bool = False, # whether to play the generated music
 ) -> int:
     models: dict[int, HierarchicalMarkovModel] | None = None
     index_to_chord: list[ChordToken] | None = None
@@ -525,7 +366,7 @@ def run_orders(
 
     if load_model is not None:
         try:
-            models, index_to_chord = _load_models_for_orders(load_model, orders)
+            models, index_to_chord = load_models_for_orders(load_model, orders)
         except (FileNotFoundError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -545,7 +386,7 @@ def run_orders(
     )
 
     if save_model is not None and trained_fresh:
-        chord_sequences = _collect_chord_sequences(training_paths)
+        chord_sequences = collect_chord_sequences(training_paths)
         chord_to_index = build_chord_vocabulary(chord_sequences)
         for order, _, model in multi.results:
             save_dir = save_model / f"order{order}"
@@ -559,33 +400,26 @@ def run_orders(
     print_orders_analysis(multi, style=style)
 
     if play:
-        original_midi, original_duration = _export_original_midi(source_piece, f"{style}_original")
-        tracks: list[tuple[str, Path, float]] = [
-            ("Original", original_midi, original_duration),
-        ]
+        original_midi, original_duration = export_original_midi(source_piece, f"{style}_original")
+        print(f"Original MIDI written: {original_midi}")
+        tracks: list[tuple[str, Path, float]] = [("Original", original_midi, original_duration)]
         for order, result, _ in multi.results:
-            tracks.append(
-                (
-                    f"{style} order {order}",
-                    midi_paths[order],
-                    _composition_duration_seconds(result),
-                )
-            )
+            tracks.append((f"{style} order {order}", midi_paths[order], composition_duration_seconds(result)))
         _play_sequence(tracks)
     return 0
 
 # run a comparison of order-1 and order-2
 def run_compare(
-    *,
-    style: str,
-    n_chords: int,
-    notes_per_chord: int,
-    tempo_bpm: int,
-    training_paths: Sequence[Path],
-    source_piece: Path,
-    load_model: Path | None,
-    save_model: Path | None,
-    play: bool = False,
+    *, # the following parameters are used for generation
+    style: str, # the style to use for generation
+    n_chords: int, # the number of chords to generate
+    notes_per_chord: int, # the number of notes to generate per chord
+    tempo_bpm: int, # the tempo to use for generation
+    training_paths: Sequence[Path], # the paths to the training data
+    source_piece: Path, # the path to the source piece
+    load_model: Path | None, # the path to the model to load
+    save_model: Path | None, # the path to save the model
+    play: bool = False, # whether to play the generated music
 ) -> int:
     return run_orders(
         [1, 2],
@@ -623,14 +457,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     corpus_paths = load_corpus(args.style)
-    source_piece = _resolve_source(args.source, args.style, corpus_paths)
+    source_piece = resolve_source(args.source, args.style, corpus_paths)
     training_paths = [source_piece] if args.single_source else corpus_paths
 
     n_chords = args.n_chords
     if args.duration is not None:
         if args.n_chords != DEFAULT_N_CHORDS:
             logger.info("--duration overrides --n-chords for generated pieces.")
-        n_chords = _seconds_to_n_chords(args.duration, args.tempo)
+        n_chords = seconds_to_n_chords(args.duration, args.tempo)
 
     multi_order_run = len(effective_orders) > 1 or args.compare or args.orders is not None
     if multi_order_run:
@@ -664,10 +498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             save_model_bundle(model, args.save_model, chord_to_index)
 
     if model.melody.order != order:
-        print(
-            f"error: loaded melody order is {model.melody.order}, but run requested order {order}",
-            file=sys.stderr,
-        )
+        print(f"error: loaded melody order is {model.melody.order}, but run requested order {order}", file=sys.stderr)
         return 1
 
     midi_path, result = run_generation(
@@ -681,16 +512,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_stem=f"{args.style}_order{order}",
     )
     if args.play:
-        original_midi, original_duration = _export_original_midi(source_piece, f"{args.style}_original")
+        original_midi, original_duration = export_original_midi(source_piece, f"{args.style}_original")
+        print(f"Original MIDI written: {original_midi}")
         _play_sequence(
-            [
-                ("Original", original_midi, original_duration),
-                (
-                    f"{args.style} order {order}",
-                    midi_path,
-                    _composition_duration_seconds(result),
-                ),
-            ]
+            [("Original", original_midi, original_duration), (f"{args.style} order {order}", midi_path, composition_duration_seconds(result))]
         )
     return 0
 
