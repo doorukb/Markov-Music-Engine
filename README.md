@@ -157,7 +157,7 @@ make setup-audio
 python -m markov.audio_setup
 ```
 
-WAV synthesis uses the **FluidSynth CLI** when it is on `PATH`, otherwise **pyfluidsynth** (included in `requirements.txt`). This avoids common Windows PATH issues.
+On first run the app also downloads a **portable FluidSynth** binary into `data/bin/` (Windows). WAV synthesis uses that bundled executable, a system FluidSynth on `PATH`, or **pyfluidsynth** with the native FluidSynth DLL from `data/bin/`. The `pyfluidsynth` pip package alone is **not** enough on Windows — you need the native library (bundled automatically).
 
 **CLI `--play`** still uses pygame + the system MIDI synthesizer and does **not** need a soundfont. **Dashboard playback** renders WAV files in the browser and needs the soundfont + synthesizer above.
 
@@ -167,7 +167,7 @@ WAV synthesis uses the **FluidSynth CLI** when it is on `PATH`, otherwise **pyfl
 1. Expand the **Playback studio** section after generating — the setup strip shows soundfont and synthesizer status (green / amber / red).
 2. Confirm `data/soundfont.sf2` exists (`make setup-audio` if the auto-download failed).
 3. Check `outputs/*.wav` on disk; if MIDI exists but WAV does not, read the warning under each track player.
-4. On Windows, you do **not** need the `fluidsynth` executable on PATH if `pyfluidsynth` is installed; reinstall deps with `pip install -r requirements.txt`.
+4. On Windows, FluidSynth is auto-downloaded to `data/bin/` — you do not need a separate installer. Run `make setup-audio` if the download failed.
 5. If synthesis still fails, download the MIDI from each track card and play locally.
 
 
@@ -335,6 +335,6 @@ All generated files are written to `outputs/`:
 
 ## WAV export (optional)
 
-The engine renders each generated MIDI to WAV when a soundfont is available at `data/soundfont.sf2` and either the FluidSynth CLI or `pyfluidsynth` can synthesize audio. Run `make setup-audio` or let the dashboard download the soundfont on first launch. If synthesis is unavailable, WAV export is skipped and MIDI files are still written. The CLI `--play` flag uses pygame directly and does not require FluidSynth.
+The engine renders each generated MIDI to WAV when a soundfont is available at `data/soundfont.sf2` and FluidSynth is available (bundled under `data/bin/` on Windows, on `PATH`, or via a working `pyfluidsynth` + native DLL). Run `make setup-audio` or let the dashboard download the soundfont and FluidSynth binary on first launch. If synthesis is unavailable, WAV export is skipped and MIDI files are still written. The CLI `--play` flag uses pygame directly and does not require FluidSynth.
 
-FluidSynth installation: https://www.fluidsynth.org
+Optional manual FluidSynth install: https://www.fluidsynth.org

@@ -233,6 +233,7 @@ test_run.py
 outputs/*
 !outputs/.gitkeep
 data/soundfont.sf2
+data/bin/
 data/*.sf2.part
 _test_matrix.py
 dashboard/__pycache__/
@@ -240,3 +241,4 @@ models/
 visualization/__pycache__/
 pytest.ini
 test_run.py
+scripts/
