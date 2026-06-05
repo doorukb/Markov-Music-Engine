@@ -11,9 +11,11 @@ Markov Music Engine is a hierarchical Markov chain system that learns the statis
 What this project asks is not "can this produce music indistinguishable from Bach" but "what does statistical sequence modeling actually capture in music, and how far can we push it before it structurally fails." The engine is built to answer that question concretely, with a full analysis layer that exposes the Markov structure directly through stationary distributions, Shannon entropy, spectral gaps, and mixing time estimates.
 
 
+<p align="center">
+<img width="800" height="720" alt="Harmoney-transitions-pop" src="https://github.com/user-attachments/assets/1404d83b-d16c-4b5a-b729-5073b99cf365" />    
 
-<img width="400" height="360" alt="Harmoney-transitions-pop" src="https://github.com/user-attachments/assets/1404d83b-d16c-4b5a-b729-5073b99cf365" />    <img width="500" height="360" alt="Stationary-distribution-pop" src="https://github.com/user-attachments/assets/0f79d0b3-2916-4840-bdcb-207859fa7453" />
-
+<img width="800" height="620" alt="Stationary-distribution-pop" src="https://github.com/user-attachments/assets/0f79d0b3-2916-4840-bdcb-207859fa7453" />
+</p>
 
 ## How it works
 
