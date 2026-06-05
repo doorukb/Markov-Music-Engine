@@ -46,6 +46,25 @@ _MEASURE_QUARTER_LENGTH = 4.0
 def _composition_duration_seconds(result: CompositionResult) -> float:
     return len(result.composition) * _MEASURE_QUARTER_LENGTH * 60.0 / result.tempo_bpm
 
+# calculate the duration of the original MIDI source file in seconds
+def _source_midi_duration_seconds(path: Path) -> float:
+    from music21 import converter
+
+    score = converter.parse(str(path))
+    seconds = getattr(score, "seconds", None)
+    if seconds and seconds > 0:
+        return float(seconds)
+    return float(score.duration.quarterLength) * 60.0 / DEFAULT_TEMPO_BPM
+
+# export the original MIDI source file to a MIDI file
+def _export_original_midi(source_path: Path, output_stem: str) -> tuple[Path, float]:
+    from music21 import converter
+    score = converter.parse(str(source_path))
+    midi_path = OUTPUTS_DIR / f"{output_stem}.mid"
+    score.write("midi", str(midi_path))
+    print(f"Original MIDI written: {midi_path}")
+    return midi_path, _source_midi_duration_seconds(midi_path)
+
 # play a MIDI file with progress bars
 def play_midi_with_progress(path: Path, label: str, duration_seconds: float) -> None:
     import time
@@ -144,7 +163,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--play",
         action="store_true",
-        help="Play generated MIDI file(s) in sequence after generation (requires pygame).",
+        help="Play original source, then generated MIDI file(s) in sequence (requires pygame).",
     )
     return parser
 
@@ -353,8 +372,10 @@ def run_compare(
     print_comparison_analysis(comparison, style=style)
 
     if play:
+        original_midi, original_duration = _export_original_midi(corpus_paths[0], f"{style}_original")
         _play_sequence(
             [
+                ("Original", original_midi, original_duration),
                 (f"{style} order 1", midi1, _composition_duration_seconds(comparison.order1)),
                 (f"{style} order 2", midi2, _composition_duration_seconds(comparison.order2)),
             ]
@@ -422,13 +443,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_stem=f"{args.style}_order{args.order}",
     )
     if args.play:
+        original_midi, original_duration = _export_original_midi(corpus_paths[0], f"{args.style}_original")
         _play_sequence(
             [
+                ("Original", original_midi, original_duration),
                 (
                     f"{args.style} order {args.order}",
                     midi_path,
                     _composition_duration_seconds(result),
-                )
+                ),
             ]
         )
     return 0
