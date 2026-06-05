@@ -232,4 +232,13 @@ pytest.ini
 test_run.py
 outputs/*
 !outputs/.gitkeep
-_test_matrix.py
+data/soundfont.sf2
+data/bin/
+data/*.sf2.part
+models/
+dashboard/__pycache__/
+models/
+visualization/__pycache__/
+pytest.ini
+test_run.py
+scripts/
