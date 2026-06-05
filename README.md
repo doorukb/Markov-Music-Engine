@@ -12,7 +12,7 @@ What this project asks is not "can this produce music indistinguishable from Bac
 
 
 
-<img width="445" height="390" alt="Harmoney-transitions-pop" src="https://github.com/user-attachments/assets/1404d83b-d16c-4b5a-b729-5073b99cf365" />    <img width="554" height="390" alt="Stationary-distribution-pop" src="https://github.com/user-attachments/assets/0f79d0b3-2916-4840-bdcb-207859fa7453" />
+<img width="400" height="360" alt="Harmoney-transitions-pop" src="https://github.com/user-attachments/assets/1404d83b-d16c-4b5a-b729-5073b99cf365" />    <img width="500" height="360" alt="Stationary-distribution-pop" src="https://github.com/user-attachments/assets/0f79d0b3-2916-4840-bdcb-207859fa7453" />
 
 
 ## How it works
