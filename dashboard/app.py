@@ -21,7 +21,7 @@ from markov.encoder import ChordToken  # noqa: E402
 from markov.generator import Composer, MultiOrderResult  # noqa: E402
 from markov.matrix import HierarchicalMarkovModel  # noqa: E402
 from markov.analysis import summarise  # noqa: E402
-from markov.renderer import render_midi  # noqa: E402
+from dashboard.player import PreparedAudio, audio_widget, prepare_audio  # noqa: E402
 from visualization.plots import plot_metrics_panels  # noqa: E402
 
 _ORDER_OPTIONS: dict[str, list[int]] = {
@@ -36,7 +36,7 @@ _SESSION_DEFAULTS: dict[str, object] = {
     "index_to_chord": None,
     "source_piece": None,
     "last_result": None,
-    "last_midi_paths": None,
+    "last_audio": None,
 }
 
 # initialize the session state
@@ -88,7 +88,14 @@ def _ensure_trained_models(style: str, orders: list[int], single_source: bool) -
     st.session_state.index_to_chord = index_to_chord
 
 # run the generation
-def _run_generation(style: str, orders: list[int], *, n_chords: int, notes_per_chord: int, tempo_bpm: int) -> tuple[MultiOrderResult, dict[int, Path]]:
+def _run_generation(
+    style: str,
+    orders: list[int],
+    *,
+    n_chords: int,
+    notes_per_chord: int,
+    tempo_bpm: int,
+) -> tuple[MultiOrderResult, dict[int, PreparedAudio]]:
     models: dict[int, HierarchicalMarkovModel] = st.session_state.models
     index_to_chord = st.session_state.index_to_chord
 
@@ -103,12 +110,12 @@ def _run_generation(style: str, orders: list[int], *, n_chords: int, notes_per_c
     )
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    midi_paths: dict[int, Path] = {}
+    audio_by_order: dict[int, PreparedAudio] = {}
     for order, result, _ in multi.results:
         stem = f"{style}_order{order}"
-        midi_paths[order] = render_midi(result, f"{stem}.mid")
+        audio_by_order[order] = prepare_audio(result, stem)
 
-    return multi, midi_paths
+    return multi, audio_by_order
 
 # generate harmony summaries for a MultiOrderResult
 def _summaries_for_result(last_result: MultiOrderResult) -> dict[int, dict]:
@@ -126,9 +133,9 @@ def _summaries_for_result(last_result: MultiOrderResult) -> dict[int, dict]:
 def _render_results_placeholder() -> None:
     st.subheader("Results")
     last_result: MultiOrderResult | None = st.session_state.last_result
-    midi_paths: dict[int, Path] | None = st.session_state.last_midi_paths
+    last_audio: dict[int, PreparedAudio] | None = st.session_state.last_audio
 
-    if last_result is None or midi_paths is None:
+    if last_result is None or last_audio is None:
         st.info("Adjust the sidebar controls and click **Generate** to create music.")
         return
 
@@ -136,12 +143,17 @@ def _render_results_placeholder() -> None:
     st.markdown("#### Harmony metrics")
     plot_metrics_panels(summaries)
 
+    st.markdown("#### Playback")
     for order, result, _ in last_result.results:
-        path = midi_paths.get(order)
-        st.markdown(f"**Order {order}** — {result.metadata.get('n_chords')} chords, {result.metadata.get('notes_per_chord')} notes/chord, {result.tempo_bpm} BPM")
-        if path is not None:
-            st.caption(f"MIDI: `{path}`")
-        st.markdown("_Additional plots and audio players will appear here._")
+        assets = last_audio.get(order)
+        if assets is None:
+            continue
+        st.caption(
+            f"{result.metadata.get('n_chords')} chords, "
+            f"{result.metadata.get('notes_per_chord')} notes/chord, "
+            f"{result.tempo_bpm} BPM — MIDI: `{assets.midi_path}`"
+        )
+        audio_widget(assets.wav_path, f"Order {order}", midi_path=assets.midi_path)
 
 def main() -> None:
     st.set_page_config(
@@ -199,7 +211,7 @@ def main() -> None:
             with st.spinner("Training model(s)…"):
                 _ensure_trained_models(style, orders, single_source)
             with st.spinner("Generating composition(s)…"):
-                multi, midi_paths = _run_generation(
+                multi, audio_by_order = _run_generation(
                     style,
                     orders,
                     n_chords=n_chords,
@@ -207,7 +219,7 @@ def main() -> None:
                     tempo_bpm=tempo_bpm,
                 )
             st.session_state.last_result = multi
-            st.session_state.last_midi_paths = midi_paths
+            st.session_state.last_audio = audio_by_order
             st.success("Generation complete.")
         except Exception as exc:
             st.error(f"Generation failed: {exc}")
