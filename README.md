@@ -125,7 +125,7 @@ pip install -r requirements.txt
 
 The Nottingham MIDI dataset is downloaded automatically the first time you run the engine for any style. No manual dataset setup is required.
 
-
+If generation fails with a missing `data/raw/nottingham/MIDI/` path, delete `data/raw/nottingham/` and re-run — `download_nottingham()` will fetch the full ZIP again. The engine uses MIDI files only (not ABC notation).
 
 ## Dashboard (Streamlit)
 

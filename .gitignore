@@ -235,7 +235,7 @@ outputs/*
 data/soundfont.sf2
 data/bin/
 data/*.sf2.part
-_test_matrix.py
+models/
 dashboard/__pycache__/
 models/
 visualization/__pycache__/
