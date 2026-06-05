@@ -12,7 +12,12 @@ SOUNDFONT_PATH  = ROOT_DIR / "data" / "soundfont.sf2"
 # model hyperparameters
 
 SMOOTHING_ALPHA = 0.01
-SUPPORTED_ORDERS = [1, 2]
+SUPPORTED_ORDERS = [1, 2, 3]
+ORDER3_WARNING_THRESHOLD = 3
+ORDER3_RESOURCE_MESSAGE = (
+    "Order-3 melody chains use sparse per-chord storage but can still consume "
+    "significant memory and CPU on large corpora. Continue? [y/N] "
+)
 DEFAULT_ORDER        = 1
 DEFAULT_N_CHORDS     = 16
 DEFAULT_TEMPO_BPM    = 120
