@@ -20,7 +20,9 @@ from markov.data import load_corpus  # noqa: E402
 from markov.encoder import ChordToken  # noqa: E402
 from markov.generator import Composer, MultiOrderResult  # noqa: E402
 from markov.matrix import HierarchicalMarkovModel  # noqa: E402
+from markov.analysis import summarise  # noqa: E402
 from markov.renderer import render_midi  # noqa: E402
+from visualization.plots import plot_metrics_panels  # noqa: E402
 
 _ORDER_OPTIONS: dict[str, list[int]] = {
     "Order 1": [1],
@@ -65,14 +67,10 @@ def _training_paths(style: str, single_source: bool) -> list[Path]:
     return corpus_paths
 
 # ensure the models are trained
+# train the models only when the style, order selection, or single-source mode changes
 def _ensure_trained_models(style: str, orders: list[int], single_source: bool) -> None:
-    """Train models only when style, order selection, or single-source mode changes."""
     cache_key = _model_cache_key(style, orders, single_source)
-    if (
-        st.session_state.model_cache_key == cache_key
-        and st.session_state.models is not None
-        and all(order in st.session_state.models for order in orders)
-    ):
+    if st.session_state.model_cache_key == cache_key and st.session_state.models is not None and all(order in st.session_state.models for order in orders):
         return
 
     training_paths = _training_paths(style, single_source)
@@ -90,14 +88,7 @@ def _ensure_trained_models(style: str, orders: list[int], single_source: bool) -
     st.session_state.index_to_chord = index_to_chord
 
 # run the generation
-def _run_generation(
-    style: str,
-    orders: list[int],
-    *,
-    n_chords: int,
-    notes_per_chord: int,
-    tempo_bpm: int,
-) -> tuple[MultiOrderResult, dict[int, Path]]:
+def _run_generation(style: str, orders: list[int], *, n_chords: int, notes_per_chord: int, tempo_bpm: int) -> tuple[MultiOrderResult, dict[int, Path]]:
     models: dict[int, HierarchicalMarkovModel] = st.session_state.models
     index_to_chord = st.session_state.index_to_chord
 
@@ -119,6 +110,18 @@ def _run_generation(
 
     return multi, midi_paths
 
+# generate harmony summaries for a MultiOrderResult
+def _summaries_for_result(last_result: MultiOrderResult) -> dict[int, dict]:
+    summaries: dict[int, dict] = {}
+    index_to_chord = last_result.index_to_chord
+    for order, _, model in last_result.results:
+        matrix = model.harmony.transition_matrix
+        if matrix is None:
+            raise RuntimeError(f"Harmony transition matrix is missing for order {order}.")
+        summaries[order] = summarise(matrix, index_to_chord)
+    return summaries
+
+
 # render the results placeholder
 def _render_results_placeholder() -> None:
     st.subheader("Results")
@@ -129,14 +132,16 @@ def _render_results_placeholder() -> None:
         st.info("Adjust the sidebar controls and click **Generate** to create music.")
         return
 
+    summaries = _summaries_for_result(last_result)
+    st.markdown("#### Harmony metrics")
+    plot_metrics_panels(summaries)
+
     for order, result, _ in last_result.results:
         path = midi_paths.get(order)
-        st.markdown(f"**Order {order}** — {result.metadata.get('n_chords')} chords, "
-                    f"{result.metadata.get('notes_per_chord')} notes/chord, "
-                    f"{result.tempo_bpm} BPM")
+        st.markdown(f"**Order {order}** — {result.metadata.get('n_chords')} chords, {result.metadata.get('notes_per_chord')} notes/chord, {result.tempo_bpm} BPM")
         if path is not None:
             st.caption(f"MIDI: `{path}`")
-        st.markdown("_Plots and audio players will appear here._")
+        st.markdown("_Additional plots and audio players will appear here._")
 
 def main() -> None:
     st.set_page_config(
@@ -147,9 +152,7 @@ def main() -> None:
     _init_session_state()
 
     st.title("Markov Music Engine")
-    st.caption(
-        "Train hierarchical Markov chains on folk MIDI corpora and sample new chord progressions with melodies."
-    )
+    st.caption("Train hierarchical Markov chains on folk MIDI corpora and sample new chord progressions with melodies.")
 
     with st.sidebar:
         st.header("Controls")

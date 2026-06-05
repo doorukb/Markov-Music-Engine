@@ -234,3 +234,7 @@ outputs/*
 !outputs/.gitkeep
 _test_matrix.py
 dashboard/__pycache__/
+models/
+visualization/__pycache__/
+pytest.ini
+test_run.py

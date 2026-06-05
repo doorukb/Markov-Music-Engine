@@ -1,20 +1,29 @@
 """
-All matplotlib plotting functions
-- Render chord transition matrix as an annotated heatmap
-- Render stationary distribution as a labeled bar chart
-- Display entropy and spectral gap as formatted metric panels
-- Render side by side order-1 vs order-2 melody comparisons
-- All functions return matplotlib Figure objects (Streamlit-compatible)
+Plotting helpers for the Streamlit dashboard and CLI analysis views.
+
+Matplotlib functions return Figure objects for st.pyplot(). Streamlit metric
+panels render directly via st.metric().
 """
 from __future__ import annotations
-from typing import Mapping, Sequence
+
+from typing import Any, Mapping, Sequence
+
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+import streamlit as st
 from matplotlib.figure import Figure
+
 from markov.parser import ChordToken
 
-__all__ = ["plot_transition_matrix", "plot_stationary_distribution"]
+__all__ = [
+    "plot_transition_matrix",
+    "plot_stationary_distribution",
+    "plot_metrics_panel",
+    "plot_metrics_panels",
+]
+
+SummaryDict = dict[str, Any]
 
 _MAX_CHORDS = 20
 _MAX_STATIONARY_BARS = 15
@@ -72,6 +81,43 @@ def plot_transition_matrix(transition_matrix: np.ndarray, index_to_chord: Sequen
     plt.setp(ax.get_yticklabels(), rotation=0)
     fig.tight_layout()
     return fig
+
+# render a dominant chord, chain entropy, and mixing time as a three-column st.metric row
+# When baseline is provided (order-2 vs order-1 comparison), entropy and mixing time include a delta versus the baseline summary
+def plot_metrics_panel(summary: SummaryDict, order: int, *, baseline: SummaryDict | None = None) -> None:
+    entropy_delta: float | None = None
+    mixing_delta: int | None = None
+    if baseline is not None:
+        entropy_delta = float(summary["entropy_bits"]) - float(baseline["entropy_bits"])
+        mixing_delta = int(summary["mixing_time_steps"]) - int(baseline["mixing_time_steps"])
+
+    col_dominant, col_entropy, col_mixing = st.columns(3)
+    with col_dominant:
+        st.metric("Dominant chord", str(summary["dominant_chord"]), f"{float(summary['dominant_chord_pct']):.1f}% stationary mass")
+    with col_entropy:
+        st.metric("Chain entropy (bits)", f"{float(summary['entropy_bits']):.3f}", delta=f"{entropy_delta:+.3f}" if entropy_delta is not None else None, delta_color="normal")
+    with col_mixing:
+        st.metric("Mixing time (steps)", str(int(summary["mixing_time_steps"])), delta=f"{mixing_delta:+d}" if mixing_delta is not None else None, delta_color="normal")
+
+# render harmony metrics for one or more melody orders
+# Displays one or more three-column metric rows, one per order, with order-2 deltas vs order-1 if provided
+# Single-order : one three-column row. Comparison mode: one row per order; order 2 shows entropy and mixing-time deltas relative to order 1.
+def plot_metrics_panels(summaries_by_order: Mapping[int, SummaryDict]) -> None:
+    if not summaries_by_order:
+        raise ValueError("summaries_by_order must not be empty")
+
+    orders = sorted(summaries_by_order)
+    compare = len(orders) > 1
+    baseline = summaries_by_order.get(1) if compare and 1 in summaries_by_order else None
+
+    for order in orders:
+        if compare:
+            st.markdown(f"**Order {order}**")
+        plot_metrics_panel(
+            summaries_by_order[order],
+            order,
+            baseline=baseline if compare and order != 1 and baseline is not None else None,
+        )
 
 # render the stationary distribution as a horizontal bar chart
 # Shows the top chords by long-run probability (capped at 15), sorted descending, with percentage labels on each bar
