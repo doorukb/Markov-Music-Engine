@@ -1,5 +1,8 @@
 run:
-    streamlit run dashboard/app.py
+    python -m streamlit run dashboard/app.py
+
+setup-audio:
+    python -m markov.audio_setup
 
 test:
     pytest tests/

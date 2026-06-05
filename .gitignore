@@ -232,6 +232,8 @@ pytest.ini
 test_run.py
 outputs/*
 !outputs/.gitkeep
+data/soundfont.sf2
+data/*.sf2.part
 _test_matrix.py
 dashboard/__pycache__/
 models/

@@ -4,6 +4,7 @@
 - music21
 - NumPy
 - pygame
+- streamlit (optional)
 
 Markov Music Engine is a hierarchical Markov chain system that learns the statistical structure of music from a MIDI corpus and generates new, stylistically coherent compositions. Unlike toy Markov text generators, this engine operates on two nested levels simultaneously: a chord-level chain that captures harmonic progressions, and a per-chord melody chain where transition probabilities depend on the current harmonic context. The result is a Hierarchical Markov Model that produces compositions that genuinely reflect the style of the source material rather than random note sequences.
 
@@ -126,7 +127,52 @@ The Nottingham MIDI dataset is downloaded automatically the first time you run t
 
 
 
-## CLI
+## Dashboard (Streamlit)
+
+The interactive UI lives in `dashboard/app.py`. **Streamlit must be installed** (`pip install -r requirements.txt` includes `streamlit>=1.35.0`).
+
+From the project root, with your virtual environment activated:
+
+```bash
+python -m streamlit run dashboard/app.py
+```
+
+Use `python -m streamlit` rather than the bare `streamlit` command. On Windows, the `streamlit` executable is often not on `PATH` even after a successful `pip install`; the module form always uses the same Python environment you installed into.
+
+Alternatively:
+
+```bash
+make run
+```
+
+The app opens in your browser (default: http://localhost:8501).
+
+### Audio setup (first run)
+
+On first launch the dashboard **auto-downloads** a free General MIDI soundfont to `data/soundfont.sf2` (FluidR3_GM, ~140 MB). You can also provision it manually :
+
+```bash
+make setup-audio
+# or
+python -m markov.audio_setup
+```
+
+WAV synthesis uses the **FluidSynth CLI** when it is on `PATH`, otherwise **pyfluidsynth** (included in `requirements.txt`). This avoids common Windows PATH issues.
+
+**CLI `--play`** still uses pygame + the system MIDI synthesizer and does **not** need a soundfont. **Dashboard playback** renders WAV files in the browser and needs the soundfont + synthesizer above.
+
+
+### Troubleshooting dashboard audio
+
+1. Expand the **Playback studio** section after generating — the setup strip shows soundfont and synthesizer status (green / amber / red).
+2. Confirm `data/soundfont.sf2` exists (`make setup-audio` if the auto-download failed).
+3. Check `outputs/*.wav` on disk; if MIDI exists but WAV does not, read the warning under each track player.
+4. On Windows, you do **not** need the `fluidsynth` executable on PATH if `pyfluidsynth` is installed; reinstall deps with `pip install -r requirements.txt`.
+5. If synthesis still fails, download the MIDI from each track card and play locally.
+
+
+
+## CLI (Recommended)
 
 All generation is done through `main.py`. Run from the project root.
 
@@ -289,6 +335,6 @@ All generated files are written to `outputs/`:
 
 ## WAV export (optional)
 
-If FluidSynth is installed and a soundfont is placed at `data/soundfont.sf2`, the engine will render each generated MIDI to WAV automatically. If FluidSynth is not available, WAV export is silently skipped and MIDI files are still written. The `--play` flag uses pygame directly and does not require FluidSynth.
+The engine renders each generated MIDI to WAV when a soundfont is available at `data/soundfont.sf2` and either the FluidSynth CLI or `pyfluidsynth` can synthesize audio. Run `make setup-audio` or let the dashboard download the soundfont on first launch. If synthesis is unavailable, WAV export is skipped and MIDI files are still written. The CLI `--play` flag uses pygame directly and does not require FluidSynth.
 
 FluidSynth installation: https://www.fluidsynth.org
