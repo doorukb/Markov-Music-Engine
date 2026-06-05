@@ -1,14 +1,42 @@
 """
-main entry point for the Markov Music Engine
+Markov Music Engine - command-line entry point
 
-Example Usage :
-    python main.py --style classical --order 1 --n-chords 16 --tempo 120
-    python main.py --style jazz --order 2 --compare --play
+Flags:
+  --style {classical|jazz|pop}  Corpus/style to train on (required).
+  --order {1|2}                 Melody Markov order for single-order runs (default 1).
+  --n-chords N                  Number of chords (each = one 4/4 measure) to generate.
+  --duration SECONDS            Make generated pieces last ~SECONDS (overrides --n-chords).
+  --notes-per-chord N           Melody notes per chord/measure (default 4).
+  --tempo BPM                   Playback/score tempo (default 120).
+  --compare                     Generate BOTH order-1 and order-2 side by side.
+  --single-source               Train the model(s) on ONE piece so output matches the original.
+  --source PATH|STYLE           Pick the original: exact file path, a style keyword
+                                (random piece of that style), or omitted (random piece of --style).
+  --play                        Play Original -> generated piece(s) with a progress bar ('s' to skip).
+  --save-model DIR / --load-model DIR   Persist or reuse a trained model.
+
+# Hear the original, then order 1, then order 2 (most common) - try each genre:
+    python main.py --style classical --compare --play --single-source
+    python main.py --style jazz      --compare --play --single-source
+    python main.py --style pop       --compare --play --single-source
+# Same, but pick the exact source piece, fixed ~30s generated length:
+    python main.py --style jazz --compare --play --single-source --source "outputs/jazz_original.mid" --duration 30
+# Just listen to one order from a random piece of a style:
+    python main.py --style classical --order 2 --play --single-source --source classical
+
+# Analysis only (no audio) - prints stationary distribution, entropy, mixing time:
+    python main.py --style jazz --compare
+    python main.py --style classical --order 1 --n-chords 16
+
+# Save once, then reuse without retraining:
+    python main.py --style pop --compare --save-model models/pop
+    python main.py --style pop --compare --play --load-model models/pop
 """
 from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -42,12 +70,16 @@ _CHORD_VOCAB_FILE = "chord_vocab.json"
 _TOP_STATIONARY_ROWS = 10
 _MEASURE_QUARTER_LENGTH = 4.0
 
+# one chord = one 4/4 measure = 240/tempo seconds
+def _seconds_to_n_chords(seconds: float, tempo_bpm: int) -> int:
+    return max(1, round(seconds * tempo_bpm / (_MEASURE_QUARTER_LENGTH * 60.0)))
+
 # calculate the duration of a composition in seconds
 def _composition_duration_seconds(result: CompositionResult) -> float:
     return len(result.composition) * _MEASURE_QUARTER_LENGTH * 60.0 / result.tempo_bpm
 
-# calculate the duration of the original MIDI source file in seconds
-def _source_midi_duration_seconds(path: Path) -> float:
+# measure duration from the written MIDI file pygame actually plays
+def _midi_file_duration_seconds(path: Path) -> float:
     from music21 import converter
 
     score = converter.parse(str(path))
@@ -56,6 +88,21 @@ def _source_midi_duration_seconds(path: Path) -> float:
         return float(seconds)
     return float(score.duration.quarterLength) * 60.0 / DEFAULT_TEMPO_BPM
 
+def _resolve_source(source_arg: str | None, style: str, corpus_paths: Sequence[Path]) -> Path:
+    if not source_arg:
+        return random.choice(list(corpus_paths))
+    p = Path(source_arg)
+    if p.is_file():
+        return p
+    if source_arg in SUPPORTED_STYLES:
+        return random.choice(load_corpus(source_arg))
+    logger.warning(
+        "--source %r is not a file or known style; using a random %s piece.",
+        source_arg,
+        style,
+    )
+    return random.choice(list(corpus_paths))
+
 # export the original MIDI source file to a MIDI file
 def _export_original_midi(source_path: Path, output_stem: str) -> tuple[Path, float]:
     from music21 import converter
@@ -63,7 +110,7 @@ def _export_original_midi(source_path: Path, output_stem: str) -> tuple[Path, fl
     midi_path = OUTPUTS_DIR / f"{output_stem}.mid"
     score.write("midi", str(midi_path))
     print(f"Original MIDI written: {midi_path}")
-    return midi_path, _source_midi_duration_seconds(midi_path)
+    return midi_path, _midi_file_duration_seconds(midi_path)
 
 # play a MIDI file with progress bars
 def play_midi_with_progress(path: Path, label: str, duration_seconds: float) -> None:
@@ -71,7 +118,12 @@ def play_midi_with_progress(path: Path, label: str, duration_seconds: float) -> 
     import pygame
     from tqdm import tqdm
 
-    print(f"\nNow playing: {label}")
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
+
+    print(f"\nNow playing: {label}   (press 's' to skip)")
     pygame.mixer.music.load(str(path))
     pygame.mixer.music.play()
 
@@ -85,10 +137,16 @@ def play_midi_with_progress(path: Path, label: str, duration_seconds: float) -> 
     ) as pbar:
         prev = 0.0
         while pygame.mixer.music.get_busy():
+            if msvcrt and msvcrt.kbhit() and msvcrt.getch() in (b"s", b"S", b"\r"):
+                pygame.mixer.music.stop()
+                print(f"Skipped {label}.")
+                break
             time.sleep(0.1)
             elapsed = min(pygame.mixer.music.get_pos() / 1000.0, duration_seconds)
             pbar.update(round(elapsed - prev, 1))
             prev = elapsed
+        pbar.n = pbar.total
+        pbar.refresh()
 
 # play a sequence of MIDI files with progress bars
 def _play_sequence(tracks: list[tuple[str, Path, float]]) -> None:
@@ -127,6 +185,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Number of chord steps to generate (default: {DEFAULT_N_CHORDS}).",
     )
     parser.add_argument(
+        "--duration",
+        type=float,
+        metavar="SECONDS",
+        help="Target length for generated pieces in seconds (overrides --n-chords).",
+    )
+    parser.add_argument(
         "--notes-per-chord",
         type=int,
         default=4,
@@ -145,6 +209,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--compare",
         action="store_true",
         help="Generate order-1 and order-2 outputs side by side (MIDI and WAV).",
+    )
+    parser.add_argument(
+        "--single-source",
+        action="store_true",
+        help="Train on one source piece so generated output matches the original.",
+    )
+    parser.add_argument(
+        "--source",
+        metavar="PATH|STYLE",
+        help="Source piece: file path, style keyword (random piece), or omit for random --style piece.",
     )
     parser.add_argument(
         "--save-model",
@@ -326,7 +400,8 @@ def run_compare(
     n_chords: int,
     notes_per_chord: int,
     tempo_bpm: int,
-    corpus_paths: Sequence[Path],
+    training_paths: Sequence[Path],
+    source_piece: Path,
     load_model: Path | None,
     save_model: Path | None,
     play: bool = False,
@@ -347,20 +422,20 @@ def run_compare(
         model2, _ = load_model_bundle(dir2)
         models = (model1, model2)
     else:
-        logger.info("Training order-1 and order-2 models on %s file(s)", len(corpus_paths))
+        logger.info("Training order-1 and order-2 models on %s file(s)", len(training_paths))
 
     comparison = Composer.compare(
         style,
         n_chords,
         notes_per_chord=notes_per_chord,
         tempo_bpm=tempo_bpm,
-        corpus_paths=corpus_paths if models is None else None,
+        corpus_paths=training_paths if models is None else None,
         models=models,
         index_to_chord=index_to_chord,
     )
 
     if save_model is not None and models is None:
-        chord_sequences = _collect_chord_sequences(corpus_paths)
+        chord_sequences = _collect_chord_sequences(training_paths)
         chord_to_index = build_chord_vocabulary(chord_sequences)
         for order, model in zip((1, 2), comparison.models, strict=True):
             save_dir = save_model / f"order{order}"
@@ -372,7 +447,7 @@ def run_compare(
     print_comparison_analysis(comparison, style=style)
 
     if play:
-        original_midi, original_duration = _export_original_midi(corpus_paths[0], f"{style}_original")
+        original_midi, original_duration = _export_original_midi(source_piece, f"{style}_original")
         _play_sequence(
             [
                 ("Original", original_midi, original_duration),
@@ -395,17 +470,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.tempo <= 0:
         print("error: --tempo must be positive", file=sys.stderr)
         return 2
+    if args.duration is not None and args.duration <= 0:
+        print("error: --duration must be positive", file=sys.stderr)
+        return 2
 
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     corpus_paths = load_corpus(args.style)
+    source_piece = _resolve_source(args.source, args.style, corpus_paths)
+    training_paths = [source_piece] if args.single_source else corpus_paths
+
+    n_chords = args.n_chords
+    if args.duration is not None:
+        if args.n_chords != DEFAULT_N_CHORDS:
+            logger.info("--duration overrides --n-chords for generated pieces.")
+        n_chords = _seconds_to_n_chords(args.duration, args.tempo)
 
     if args.compare:
         return run_compare(
             style=args.style,
-            n_chords=args.n_chords,
+            n_chords=n_chords,
             notes_per_chord=args.notes_per_chord,
             tempo_bpm=args.tempo,
-            corpus_paths=corpus_paths,
+            training_paths=training_paths,
+            source_piece=source_piece,
             load_model=args.load_model,
             save_model=args.save_model,
             play=args.play,
@@ -419,8 +506,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         model, index_to_chord = load_model_bundle(args.load_model)
         chord_to_index = None
     else:
-        logger.info("Training model (order=%s) on %s file(s)", args.order, len(corpus_paths))
-        model, index_to_chord, chord_to_index = train_model(corpus_paths, args.order)
+        logger.info("Training model (order=%s) on %s file(s)", args.order, len(training_paths))
+        model, index_to_chord, chord_to_index = train_model(training_paths, args.order)
         if args.save_model is not None:
             logger.info("Saving model to %s", args.save_model)
             save_model_bundle(model, args.save_model, chord_to_index)
@@ -437,13 +524,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         index_to_chord,
         style=args.style,
         order=args.order,
-        n_chords=args.n_chords,
+        n_chords=n_chords,
         notes_per_chord=args.notes_per_chord,
         tempo_bpm=args.tempo,
         output_stem=f"{args.style}_order{args.order}",
     )
     if args.play:
-        original_midi, original_duration = _export_original_midi(corpus_paths[0], f"{args.style}_original")
+        original_midi, original_duration = _export_original_midi(source_piece, f"{args.style}_original")
         _play_sequence(
             [
                 ("Original", original_midi, original_duration),

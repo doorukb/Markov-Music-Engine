@@ -194,9 +194,7 @@ def _sample_start_chord(model: HierarchicalMarkovModel) -> ChordIndex:
     active = active[active != UNK_CHORD_INDEX]
     if len(active) == 0:
         raise RuntimeError("Cannot compose: no valid harmony states with outgoing transitions.")
-    # weight by stationary distribution (stationary_power_iteration) so the
-    # starting chord is drawn from the model's long-run equilibrium rather than
-    # uniformly, so that improves musical coherence for short compositions.
+    # sample uniformly among active harmony states (not weighted by stationary distribution).
     return int(np.random.choice(active))
 
 # compose a composition from the model
