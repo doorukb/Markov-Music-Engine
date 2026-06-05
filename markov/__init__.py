@@ -13,6 +13,7 @@ smoothing   : Laplace and other smoothing strategies for sparse matrices
 analysis    : stationary distribution, entropy, mixing time, matrix powers
 generator   : full composition pipeline (chord sequence → note sequence)
 renderer    : MIDI file writer and FluidSynth audio synthesis
+training    : corpus training helpers (CLI and dashboard)
 """
 from markov.encoder import (
     build_chord_vocabulary,

@@ -1,19 +1,11 @@
-"""
-Plotting helpers for the Streamlit dashboard and CLI analysis views.
-
-Matplotlib functions return Figure objects for st.pyplot(). Streamlit metric
-panels render directly via st.metric().
-"""
 from __future__ import annotations
-
 from typing import Any, Mapping, Sequence
-
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import streamlit as st
 from matplotlib.figure import Figure
-
+from markov.harmony import UNK_CHORD_INDEX
 from markov.parser import ChordToken
 
 __all__ = [
@@ -37,26 +29,28 @@ def _truncate_label(chord: ChordToken, max_len: int = _LABEL_MAX_LEN) -> str:
         return text
     return text[: max_len - 1] + "…"
 
+# top chord indices by row-sum, excluding the UNK token (index 0)
+def _rank_active_indices(row_sums: np.ndarray, cap: int = _MAX_CHORDS) -> np.ndarray:
+    active = np.flatnonzero(row_sums > 0)
+    active = active[active != UNK_CHORD_INDEX]
+    if active.size == 0:
+        return np.array([], dtype=int)
+    ranked = active[np.argsort(row_sums[active])[::-1]]
+    return ranked[: min(cap, ranked.size)]
+
 # get the top active indices for a transition matrix
 def _top_active_indices(transition_matrix: np.ndarray, cap: int = _MAX_CHORDS) -> np.ndarray:
     row_sums = np.asarray(transition_matrix, dtype=np.float64).sum(axis=1)
-    n = min(cap, row_sums.shape[0])
-    return np.argsort(row_sums)[::-1][:n]
+    return _rank_active_indices(row_sums, cap)
 
-
-def shared_top_chord_indices(
-    transition_matrices: Sequence[np.ndarray],
-    cap: int = _MAX_CHORDS,
-) -> np.ndarray:
-    """Top chord indices by combined row-sum across matrices (same axes for comparison)."""
+# get the top chord indices by combined row-sum across matrices (same axes for comparison)
+def shared_top_chord_indices(transition_matrices: Sequence[np.ndarray], cap: int = _MAX_CHORDS) -> np.ndarray:
     if not transition_matrices:
         raise ValueError("transition_matrices must not be empty")
     combined = np.zeros(transition_matrices[0].shape[0], dtype=np.float64)
     for matrix in transition_matrices:
         combined += np.asarray(matrix, dtype=np.float64).sum(axis=1)
-    n = min(cap, combined.shape[0])
-    return np.argsort(combined)[::-1][:n]
-
+    return _rank_active_indices(combined, cap)
 
 # render a chord transition matrix as an annotated heatmap
 # Axes show the top chords by row-sum (outgoing mass), capped at 20, with truncated chord-name labels for readability
@@ -159,7 +153,8 @@ def plot_stationary_distribution(stationary_dict: Mapping[ChordToken, float], ti
     fig, ax = plt.subplots(figsize=(8.0, fig_height))
 
     y_pos = np.arange(n)
-    bars = ax.barh(y_pos, probs, color=sns.color_palette("Blues", n_colors=n + 2)[1], edgecolor="white")
+    bar_color = sns.color_palette("Blues", n_colors=n + 2)[2]
+    bars = ax.barh(y_pos, probs, color=[bar_color] * n, edgecolor="white")
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels)
     ax.invert_yaxis()

@@ -79,19 +79,12 @@ from config import (
     SUPPORTED_STYLES,
 )
 from markov.analysis import summarise
-from markov.data import load_corpus
-from markov.encoder import (
-    ChordToken,
-    build_chord_vocabulary,
-    build_note_vocabulary,
-    chord_vocabulary_inverse,
-    encode_chords,
-)
+from markov.data import collect_chord_sequences, load_corpus
+from markov.encoder import ChordToken, build_chord_vocabulary, chord_vocabulary_inverse, encode_chords
 from markov.generator import Composer, CompositionResult, MultiOrderResult
-from markov.harmony import ChordChain
 from markov.matrix import HierarchicalMarkovModel
-from markov.melody import MelodyChain
 from markov.parser import ParseError, parse_midi
+from markov.training import train_model
 from markov.renderer import render_midi, render_wav
 
 logger = logging.getLogger(__name__)
@@ -351,33 +344,6 @@ def _load_index_to_chord(directory: Path, vocab_size: int) -> list[ChordToken]:
         return chord_vocabulary_inverse(chord_to_index)
     return [f"chord_{i}" for i in range(vocab_size)]
 
-# collect chord sequences from a list of MIDI files
-def _collect_chord_sequences(paths: Sequence[Path]) -> list[list[ChordToken]]:
-    sequences: list[list[ChordToken]] = []
-    for path in paths:
-        try:
-            chord_sequence, _ = parse_midi(path)
-            sequences.append(chord_sequence)
-        except ParseError as exc:
-            logger.warning("skipping %s: %s", path, exc)
-    return sequences
-
-# train the model on a list of MIDI files
-def train_model(paths: Sequence[Path], order: int) -> tuple[HierarchicalMarkovModel, list[ChordToken], dict[ChordToken, int]]:
-    chord_sequences = _collect_chord_sequences(paths)
-    if not chord_sequences:
-        raise RuntimeError("No chord sequences could be parsed from the corpus.")
-
-    chord_to_index = build_chord_vocabulary(chord_sequences)
-    index_to_chord = chord_vocabulary_inverse(chord_to_index)
-    note_to_index = build_note_vocabulary()
-
-    harmony = ChordChain(vocab_size=len(chord_to_index))
-    melody = MelodyChain(order=order)
-    model = HierarchicalMarkovModel(harmony=harmony, melody=melody)
-    model.train(paths, parse_midi, encode_chords, chord_to_index, note_to_index)
-    return model, index_to_chord, chord_to_index
-
 # load a model bundle from a directory
 def load_model_bundle(directory: Path) -> tuple[HierarchicalMarkovModel, list[ChordToken]]:
     model = HierarchicalMarkovModel.load(directory)
@@ -475,10 +441,7 @@ def run_generation(
     matrix = model.harmony.transition_matrix
     if matrix is None:
         raise RuntimeError("Harmony transition matrix is missing after training.")
-    print_analysis(
-        summarise(matrix, index_to_chord),
-        title=f"Harmony analysis - {style}, order {order}",
-    )
+    print_analysis(summarise(matrix, index_to_chord), title=f"Harmony analysis - {style}, order {order}")
     return midi_path, result
 
 # load the models for a given set of orders
@@ -545,7 +508,7 @@ def run_orders(
     )
 
     if save_model is not None and trained_fresh:
-        chord_sequences = _collect_chord_sequences(training_paths)
+        chord_sequences = collect_chord_sequences(training_paths)
         chord_to_index = build_chord_vocabulary(chord_sequences)
         for order, _, model in multi.results:
             save_dir = save_model / f"order{order}"
@@ -560,17 +523,9 @@ def run_orders(
 
     if play:
         original_midi, original_duration = _export_original_midi(source_piece, f"{style}_original")
-        tracks: list[tuple[str, Path, float]] = [
-            ("Original", original_midi, original_duration),
-        ]
+        tracks: list[tuple[str, Path, float]] = [("Original", original_midi, original_duration)]
         for order, result, _ in multi.results:
-            tracks.append(
-                (
-                    f"{style} order {order}",
-                    midi_paths[order],
-                    _composition_duration_seconds(result),
-                )
-            )
+            tracks.append((f"{style} order {order}", midi_paths[order], _composition_duration_seconds(result)))
         _play_sequence(tracks)
     return 0
 
@@ -664,10 +619,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             save_model_bundle(model, args.save_model, chord_to_index)
 
     if model.melody.order != order:
-        print(
-            f"error: loaded melody order is {model.melody.order}, but run requested order {order}",
-            file=sys.stderr,
-        )
+        print(f"error: loaded melody order is {model.melody.order}, but run requested order {order}", file=sys.stderr)
         return 1
 
     midi_path, result = run_generation(
@@ -683,14 +635,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.play:
         original_midi, original_duration = _export_original_midi(source_piece, f"{args.style}_original")
         _play_sequence(
-            [
-                ("Original", original_midi, original_duration),
-                (
-                    f"{args.style} order {order}",
-                    midi_path,
-                    _composition_duration_seconds(result),
-                ),
-            ]
+            [("Original", original_midi, original_duration), (f"{args.style} order {order}", midi_path, _composition_duration_seconds(result))]
         )
     return 0
 

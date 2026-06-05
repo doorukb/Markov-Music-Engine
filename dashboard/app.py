@@ -6,29 +6,19 @@ from typing import Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
-from config import (
+from config import (  # noqa: E402
     DEFAULT_N_CHORDS,
     DEFAULT_TEMPO_BPM,
     OUTPUTS_DIR,
     SUPPORTED_STYLES,
 )
-from main import train_model
-from markov.data import collect_chord_sequences, load_corpus
-from markov.encoder import (
-    build_chord_vocabulary,
-    build_note_vocabulary,
-    chord_vocabulary_inverse,
-    encode_chords,
-)
-from markov.harmony import ChordChain
-from markov.melody import MelodyChain
-from markov.parser import parse_midi
-from markov.encoder import ChordToken
-from markov.generator import Composer, CompositionResult, MultiOrderResult
-from markov.matrix import HierarchicalMarkovModel
-from markov.analysis import summarise
-from dashboard.player import PreparedAudio, audio_widget, prepare_audio
-from visualization.plots import (
+from dashboard.player import PreparedAudio, audio_widget, prepare_audio  # noqa: E402
+from markov.analysis import summarise  # noqa: E402
+from markov.data import load_corpus  # noqa: E402
+from markov.generator import Composer, CompositionResult, MultiOrderResult  # noqa: E402
+from markov.matrix import HierarchicalMarkovModel  # noqa: E402
+from markov.training import train_models  # noqa: E402
+from visualization.plots import (  # noqa: E402
     plot_metrics_panel,
     plot_stationary_distribution,
     plot_transition_matrix,
@@ -89,27 +79,8 @@ def _ensure_trained_models(style: str, orders: list[int], single_source: bool) -
         return
 
     training_paths = _training_paths(style, single_source)
-    models: dict[int, HierarchicalMarkovModel] = {}
     unique_orders = sorted(set(orders))
-
-    if len(unique_orders) > 1:
-        chord_sequences = collect_chord_sequences(training_paths)
-        if not chord_sequences:
-            raise RuntimeError("No chord sequences could be parsed from the training corpus.")
-        chord_to_index = build_chord_vocabulary(chord_sequences)
-        index_to_chord = list(chord_vocabulary_inverse(chord_to_index))
-        note_to_index = build_note_vocabulary()
-        for order in unique_orders:
-            harmony = ChordChain(vocab_size=len(chord_to_index))
-            melody = MelodyChain(order=order)
-            model = HierarchicalMarkovModel(harmony=harmony, melody=melody)
-            model.train(training_paths, parse_midi, encode_chords, chord_to_index, note_to_index)
-            models[order] = model
-    else:
-        order = unique_orders[0]
-        model, resolved_index, _ = train_model(training_paths, order)
-        models[order] = model
-        index_to_chord = list(resolved_index)
+    models, index_to_chord, _ = train_models(training_paths, unique_orders)
 
     st.session_state.model_cache_key = cache_key
     st.session_state.models = models
@@ -217,8 +188,7 @@ def _render_compare_results(
     chord_indices = shared_top_chord_indices(matrices)
     heatmap_vmax = _heatmap_vmax(matrices, index_to_chord, chord_indices)
 
-    col_left, col_right = st.columns(2)
-    columns = [col_left, col_right]
+    columns = st.columns(len(orders))
     for col, order in zip(columns, orders):
         result = next(r for o, r, _ in last_result.results if o == order)
         model = next(m for o, _, m in last_result.results if o == order)
@@ -343,7 +313,7 @@ def main() -> None:
                 )
             st.session_state.last_result = multi
             st.session_state.last_audio = audio_by_order
-            st.success("Generation complete.")
+            st.toast("Generation complete.")
         except Exception as exc:
             st.error(f"Generation failed: {exc}")
 

@@ -1,3 +1,4 @@
+"""In-browser audio playback for generated compositions (MIDI → WAV → st.audio)."""
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,20 +8,13 @@ from markov.renderer import render_midi, render_wav
 
 __all__ = ["PreparedAudio", "prepare_audio", "audio_widget"]
 
-# a dataclass to hold the paths produced by prepare_audio()
-# paths produced by prepare_audio()
+# MIDI path always set; wav_path set when FluidSynth synthesis succeeds.
 @dataclass(frozen=True)
 class PreparedAudio:
     midi_path: Path
     wav_path: Path | None
 
-    # WAV path when FluidSynth synthesis succeeded, else None
-    @property
-    def wav(self) -> Path | None:
-        return self.wav_path
-
-# render MIDI, then synthesize WAV via FluidSynth
-# returns both paths, wav_path is None when FluidSynth is unavailable or synthesis fails
+# render MIDI, then synthesize WAV via FluidSynth.
 def prepare_audio(composition_result: CompositionResult, output_stem: str) -> PreparedAudio:
     midi_path = render_midi(composition_result, f"{output_stem}.mid")
     try:
@@ -29,15 +23,12 @@ def prepare_audio(composition_result: CompositionResult, output_stem: str) -> Pr
         return PreparedAudio(midi_path=midi_path, wav_path=None)
     return PreparedAudio(midi_path=midi_path, wav_path=wav_path)
 
-# render a WAV audio player and MIDI download button
-# wav_path: the path to the WAV file (may be None if FluidSynth is unavailable or synthesis fails)
-# label: the heading shown above the player or download control
-# midi_path: the path to the MIDI file (may be None if wav_path is provided)
+# play WAV in-browser, or offer a MIDI download when synthesis is unavailable
 def audio_widget(wav_path: Path | None, label: str, *, midi_path: Path | None = None) -> None:
-    # render the heading
     st.markdown(f"**{label}**")
     resolved_midi = midi_path
     if resolved_midi is None and wav_path is not None:
+        # prepare_audio uses the same stem for .mid and .wav (see render_midi / render_wav).
         resolved_midi = wav_path.with_suffix(".mid")
 
     if wav_path is not None and wav_path.is_file():
