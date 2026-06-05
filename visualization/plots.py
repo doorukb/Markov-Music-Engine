@@ -21,6 +21,7 @@ __all__ = [
     "plot_stationary_distribution",
     "plot_metrics_panel",
     "plot_metrics_panels",
+    "shared_top_chord_indices",
 ]
 
 SummaryDict = dict[str, Any]
@@ -42,20 +43,43 @@ def _top_active_indices(transition_matrix: np.ndarray, cap: int = _MAX_CHORDS) -
     n = min(cap, row_sums.shape[0])
     return np.argsort(row_sums)[::-1][:n]
 
+
+def shared_top_chord_indices(
+    transition_matrices: Sequence[np.ndarray],
+    cap: int = _MAX_CHORDS,
+) -> np.ndarray:
+    """Top chord indices by combined row-sum across matrices (same axes for comparison)."""
+    if not transition_matrices:
+        raise ValueError("transition_matrices must not be empty")
+    combined = np.zeros(transition_matrices[0].shape[0], dtype=np.float64)
+    for matrix in transition_matrices:
+        combined += np.asarray(matrix, dtype=np.float64).sum(axis=1)
+    n = min(cap, combined.shape[0])
+    return np.argsort(combined)[::-1][:n]
+
+
 # render a chord transition matrix as an annotated heatmap
 # Axes show the top chords by row-sum (outgoing mass), capped at 20, with truncated chord-name labels for readability
-def plot_transition_matrix(transition_matrix: np.ndarray, index_to_chord: Sequence[ChordToken], title: str) -> Figure:
+def plot_transition_matrix(
+    transition_matrix: np.ndarray,
+    index_to_chord: Sequence[ChordToken],
+    title: str,
+    *,
+    chord_indices: Sequence[int] | None = None,
+    vmax: float | None = None,
+) -> Figure:
     matrix = np.asarray(transition_matrix, dtype=np.float64)
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError(f"transition_matrix must be square 2D; got shape {matrix.shape}")
     if len(index_to_chord) != matrix.shape[0]:
         raise ValueError(f"index_to_chord length {len(index_to_chord)} does not match transition matrix size {matrix.shape[0]}")
 
-    indices = _top_active_indices(matrix)
+    indices = np.asarray(chord_indices if chord_indices is not None else _top_active_indices(matrix))
     sub = matrix[np.ix_(indices, indices)]
     labels = [_truncate_label(index_to_chord[i]) for i in indices]
 
     n = sub.shape[0]
+    color_max = vmax if vmax is not None else max(float(sub.max()), 1e-9)
     fig_size = max(6.0, 0.45 * n + 2.5)
     fig, ax = plt.subplots(figsize=(fig_size, fig_size * 0.9))
     sns.heatmap(
@@ -66,7 +90,7 @@ def plot_transition_matrix(transition_matrix: np.ndarray, index_to_chord: Sequen
         fmt=".2f",
         cmap="Blues",
         vmin=0.0,
-        vmax=max(sub.max(), 1e-9),
+        vmax=color_max,
         square=True,
         linewidths=0.5,
         linecolor="white",

@@ -3,26 +3,41 @@ import random
 import sys
 from pathlib import Path
 from typing import Sequence
+import matplotlib.pyplot as plt
+import numpy as np
 import streamlit as st
-
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from config import (  # noqa: E402
+from config import (
     DEFAULT_N_CHORDS,
     DEFAULT_TEMPO_BPM,
     OUTPUTS_DIR,
     SUPPORTED_STYLES,
 )
-from main import train_model  # noqa: E402
-from markov.data import load_corpus  # noqa: E402
-from markov.encoder import ChordToken  # noqa: E402
-from markov.generator import Composer, MultiOrderResult  # noqa: E402
-from markov.matrix import HierarchicalMarkovModel  # noqa: E402
-from markov.analysis import summarise  # noqa: E402
-from dashboard.player import PreparedAudio, audio_widget, prepare_audio  # noqa: E402
-from visualization.plots import plot_metrics_panels  # noqa: E402
+from main import train_model
+from markov.data import collect_chord_sequences, load_corpus
+from markov.encoder import (
+    build_chord_vocabulary,
+    build_note_vocabulary,
+    chord_vocabulary_inverse,
+    encode_chords,
+)
+from markov.harmony import ChordChain
+from markov.melody import MelodyChain
+from markov.parser import parse_midi
+from markov.encoder import ChordToken
+from markov.generator import Composer, CompositionResult, MultiOrderResult
+from markov.matrix import HierarchicalMarkovModel
+from markov.analysis import summarise
+from dashboard.player import PreparedAudio, audio_widget, prepare_audio
+from visualization.plots import (
+    plot_metrics_panel,
+    plot_stationary_distribution,
+    plot_transition_matrix,
+    shared_top_chord_indices,
+)
+
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 _ORDER_OPTIONS: dict[str, list[int]] = {
     "Order 1": [1],
@@ -75,27 +90,33 @@ def _ensure_trained_models(style: str, orders: list[int], single_source: bool) -
 
     training_paths = _training_paths(style, single_source)
     models: dict[int, HierarchicalMarkovModel] = {}
-    index_to_chord: list[ChordToken] | None = None
+    unique_orders = sorted(set(orders))
 
-    for order in sorted(set(orders)):
+    if len(unique_orders) > 1:
+        chord_sequences = collect_chord_sequences(training_paths)
+        if not chord_sequences:
+            raise RuntimeError("No chord sequences could be parsed from the training corpus.")
+        chord_to_index = build_chord_vocabulary(chord_sequences)
+        index_to_chord = list(chord_vocabulary_inverse(chord_to_index))
+        note_to_index = build_note_vocabulary()
+        for order in unique_orders:
+            harmony = ChordChain(vocab_size=len(chord_to_index))
+            melody = MelodyChain(order=order)
+            model = HierarchicalMarkovModel(harmony=harmony, melody=melody)
+            model.train(training_paths, parse_midi, encode_chords, chord_to_index, note_to_index)
+            models[order] = model
+    else:
+        order = unique_orders[0]
         model, resolved_index, _ = train_model(training_paths, order)
         models[order] = model
-        if index_to_chord is None:
-            index_to_chord = list(resolved_index)
+        index_to_chord = list(resolved_index)
 
     st.session_state.model_cache_key = cache_key
     st.session_state.models = models
     st.session_state.index_to_chord = index_to_chord
 
 # run the generation
-def _run_generation(
-    style: str,
-    orders: list[int],
-    *,
-    n_chords: int,
-    notes_per_chord: int,
-    tempo_bpm: int,
-) -> tuple[MultiOrderResult, dict[int, PreparedAudio]]:
+def _run_generation(style: str, orders: list[int], *, n_chords: int, notes_per_chord: int, tempo_bpm: int) -> tuple[MultiOrderResult, dict[int, PreparedAudio]]:
     models: dict[int, HierarchicalMarkovModel] = st.session_state.models
     index_to_chord = st.session_state.index_to_chord
 
@@ -128,6 +149,115 @@ def _summaries_for_result(last_result: MultiOrderResult) -> dict[int, dict]:
         summaries[order] = summarise(matrix, index_to_chord)
     return summaries
 
+# calculate the maximum value for the heatmap
+def _heatmap_vmax(matrices: Sequence, index_to_chord: Sequence[ChordToken], chord_indices: Sequence[int]) -> float:
+    values = []
+    for matrix in matrices:
+        sub = matrix[np.ix_(chord_indices, chord_indices)]
+        values.append(float(sub.max()))
+    return max(values) if values else 1e-9
+
+# render a single order column
+def _render_order_column(
+    *,
+    order: int, # the order of the melody
+    style: str, # the style of the music
+    result: CompositionResult, # the result of the composition
+    model: HierarchicalMarkovModel, # the model of the composition
+    summary: dict, # the summary of the composition
+    audio: PreparedAudio, # the audio of the composition
+    index_to_chord: Sequence[ChordToken], # the index to chord of the composition
+    baseline_summary: dict | None, # the baseline summary of the composition
+    chord_indices: Sequence[int] | None, # the chord indices of the composition
+    heatmap_vmax: float | None, # the maximum value for the heatmap
+) -> None:
+    st.markdown(f"### Order {order}")
+    plot_metrics_panel(summary, order, baseline=baseline_summary)
+
+    matrix = model.harmony.transition_matrix
+    if matrix is None:
+        raise RuntimeError(f"Harmony transition matrix is missing for order {order}")
+
+    fig_heatmap = plot_transition_matrix(
+        matrix,
+        index_to_chord,
+        f"Harmony transitions — {style}",
+        chord_indices=chord_indices,
+        vmax=heatmap_vmax,
+    )
+    st.pyplot(fig_heatmap)
+    plt.close(fig_heatmap)
+
+    fig_stationary = plot_stationary_distribution(summary["stationary_distribution"], f"Stationary distribution — {style}")
+    st.pyplot(fig_stationary)
+    plt.close(fig_stationary)
+
+    st.caption(f"{result.metadata.get('n_chords')} chords, {result.metadata.get('notes_per_chord')} notes/chord, {result.tempo_bpm} BPM — MIDI: `{audio.midi_path}`")
+    audio_widget(audio.wav_path, f"Order {order}", midi_path=audio.midi_path)
+
+# render the compare results
+def _render_compare_results(
+    last_result: MultiOrderResult, # the last result of the composition
+    last_audio: dict[int, PreparedAudio], # the last audio of the composition
+    summaries: dict[int, dict], # the summaries of the composition
+) -> None:
+    index_to_chord = last_result.index_to_chord
+    style = last_result.results[0][1].style
+    orders = sorted(order for order, _, _ in last_result.results)
+    baseline = summaries.get(1)
+
+    matrices = []
+    for order in orders:
+        model = next(m for o, _, m in last_result.results if o == order)
+        matrix = model.harmony.transition_matrix
+        if matrix is None:
+            raise RuntimeError(f"Harmony transition matrix is missing for order {order}.")
+        matrices.append(matrix)
+
+    chord_indices = shared_top_chord_indices(matrices)
+    heatmap_vmax = _heatmap_vmax(matrices, index_to_chord, chord_indices)
+
+    col_left, col_right = st.columns(2)
+    columns = [col_left, col_right]
+    for col, order in zip(columns, orders):
+        result = next(r for o, r, _ in last_result.results if o == order)
+        model = next(m for o, _, m in last_result.results if o == order)
+        audio = last_audio[order]
+        with col:
+            _render_order_column(
+                order=order,
+                style=style,
+                result=result,
+                model=model,
+                summary=summaries[order],
+                audio=audio,
+                index_to_chord=index_to_chord,
+                baseline_summary=baseline if order != 1 else None,
+                chord_indices=chord_indices,
+                heatmap_vmax=heatmap_vmax,
+            )
+
+# render the single order results
+def _render_single_order_results(
+    last_result: MultiOrderResult, # the last result of the composition
+    last_audio: dict[int, PreparedAudio], # the last audio of the composition
+    summaries: dict[int, dict], # the summaries of the composition
+) -> None:
+    order, result, model = last_result.results[0] # the order, result, and model of the composition
+    audio = last_audio[order]
+    style = result.style
+    _render_order_column(
+        order=order,
+        style=style,
+        result=result,
+        model=model,
+        summary=summaries[order],
+        audio=audio,
+        index_to_chord=last_result.index_to_chord,
+        baseline_summary=None,
+        chord_indices=None,
+        heatmap_vmax=None,
+    )
 
 # render the results placeholder
 def _render_results_placeholder() -> None:
@@ -140,20 +270,13 @@ def _render_results_placeholder() -> None:
         return
 
     summaries = _summaries_for_result(last_result)
-    st.markdown("#### Harmony metrics")
-    plot_metrics_panels(summaries)
+    compare = len(last_result.results) > 1
 
-    st.markdown("#### Playback")
-    for order, result, _ in last_result.results:
-        assets = last_audio.get(order)
-        if assets is None:
-            continue
-        st.caption(
-            f"{result.metadata.get('n_chords')} chords, "
-            f"{result.metadata.get('notes_per_chord')} notes/chord, "
-            f"{result.tempo_bpm} BPM — MIDI: `{assets.midi_path}`"
-        )
-        audio_widget(assets.wav_path, f"Order {order}", midi_path=assets.midi_path)
+    if compare:
+        st.markdown("#### Order comparison")
+        _render_compare_results(last_result, last_audio, summaries)
+    else:
+        _render_single_order_results(last_result, last_audio, summaries)
 
 def main() -> None:
     st.set_page_config(

@@ -8,6 +8,7 @@ from visualization.plots import (
     plot_metrics_panels,
     plot_stationary_distribution,
     plot_transition_matrix,
+    shared_top_chord_indices,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "plot_stationary_distribution",
     "plot_metrics_panel",
     "plot_metrics_panels",
+    "shared_top_chord_indices",
 ]
