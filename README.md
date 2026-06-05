@@ -1,11 +1,9 @@
 # Markov Music Engine
 
 - Python 3.10+
-- NumPy
 - music21
+- NumPy
 - pygame
-
- 
 
 Markov Music Engine is a hierarchical Markov chain system that learns the statistical structure of music from a MIDI corpus and generates new, stylistically coherent compositions. Unlike toy Markov text generators, this engine operates on two nested levels simultaneously: a chord-level chain that captures harmonic progressions, and a per-chord melody chain where transition probabilities depend on the current harmonic context. The result is a Hierarchical Markov Model that produces compositions that genuinely reflect the style of the source material rather than random note sequences.
 
@@ -27,9 +25,10 @@ For each chord context encountered during training, a separate Markov chain is l
 
 - **Order 1**: next note depends on the current note only. State space per chord is 128 rows x 128 columns. Memory-safe for any corpus size.
 - **Order 2**: next note depends on the previous two notes. State space per chord is 16,384 rows (128 x 128 encoded states) x 128 columns. Memory-safe for any corpus size, though training takes longer on large corpora.
-- **Order 3**: next note depends on the previous three notes. State space per chord grows to 2,097,152 encoded states. Order-3 uses sparse per-chord storage internally (not a dense matrix), but memory and CPU usage still grow significantly with corpus size. The CLI will print a resource warning and ask for confirmation before proceeding. See the section on order-3 below.
+- **Order 3**: next note depends on the previous three notes. State space per chord grows to 2,097,152 encoded states. Order-3 uses sparse per-chord storage internally rather than a dense matrix, but memory and CPU usage still grow significantly with corpus size. The CLI will print a resource warning and ask for confirmation before proceeding. See the section on order limits below.
 
 Higher order means more local coherence (melodic phrases sound more intentional) but also a higher chance of reproducing training material verbatim, especially on small corpora. On a single-piece training run (`--single-source`), order-2 and order-3 melodies can drift into near-random behavior once they reach note combinations that were never observed in training, because smoothing kicks in and the chain is effectively guessing. This is a fundamental property of the model, not a bug.
+
 
 ### Training
 
@@ -40,6 +39,7 @@ Parsing, encoding, and counting happen in a single pass per file. The corpus loa
 
 Both sources are combined and deduplicated by default.
 
+
 ### Generation
 
 1. A starting chord is sampled uniformly from all active harmony states (states with at least one outgoing transition).
@@ -49,7 +49,7 @@ Both sources are combined and deduplicated by default.
 
 Each chord step occupies exactly one 4/4 measure at the specified tempo. The duration of the generated piece is therefore `n_chords * (4 * 60 / tempo_bpm)` seconds.
 
- 
+
 
 ## Analysis layer
 
@@ -62,7 +62,29 @@ After every generation run the engine prints a harmony analysis dashboard for ea
 
 When multiple orders are generated together, these metrics are shown in a side-by-side table. The harmony metrics are identical across orders because the harmony layer is always order-1; the structural difference between orders lies entirely in the melody layer.
 
- 
+
+
+## On the Markov assumption
+
+A Markov chain is a primitive but honest form of statistical learning. It makes one explicit assumption: the probability of the next state depends only on the current state, not on anything that came before. This is called the memoryless property, and it is not a simplification made for convenience -- it is a deliberate modeling choice whose consequences are audible.
+
+In practice this means the chain learns which transitions are common (C-major to G-major, for example) and which are rare, and generates by sampling from those learned probabilities. No parameters are fitted by gradient descent. No loss function is minimized. The model is entirely defined by counts and their normalized ratios. That simplicity is also its ceiling: a Markov chain cannot represent that a phrase began on the tonic and must eventually resolve there, because that kind of memory spans many steps and the chain discards all of it.
+
+Order-2 partially relaxes this. The state is now a pair of notes rather than a single note, so the chain knows whether the melody has been rising or falling locally. That directional information is enough to make phrases feel slightly more intentional. Order-3 extends the window to three notes, which captures a little more contour, but at a steep memory cost: the state space grows as `128^k` per chord context, where k is the order. At order 3, the number of theoretically possible states per chord context is over two million. On any realistic corpus, almost all of those states are never observed, which means the transition matrix is almost entirely zeros and Laplace smoothing fills in the rest. At that point the model is not learning from data so much as it is generating from a prior with occasional data-informed corrections. This is the structural reason order 3 is the ceiling here, and it is also the reason the CLI requires explicit confirmation before running it.
+
+The deeper insight is that music has long-range dependencies that no finite-order Markov chain can capture. A melody can reference a motif introduced eight bars earlier. A chord progression can set up tension that resolves thirty seconds later. These are not edge cases -- they are central to what makes music coherent. Capturing them requires a model that compresses history rather than extending the window, which is precisely what recurrent neural networks and Transformers do. An LSTM learns to selectively retain relevant past information in a hidden state. A Transformer attends to all previous tokens simultaneously and learns which ones matter for predicting the next one. Both can, in principle, represent the full dependency structure of a piece. The Markov chain cannot, no matter how high the order.
+
+This engine is not trying to compete with those models. It is trying to make the statistical structure of music visible and audible in the simplest possible terms. The analysis layer -- stationary distributions, entropy, mixing times, spectral gaps -- exists precisely to expose what the chain has learned and where it runs out of expressive power. The comparison between order-1 and order-2 outputs is the clearest demonstration of what adding one step of memory actually sounds like.
+
+
+
+## Why not order 4 or higher
+
+The state space scales as `128^k` per chord context, where k is the melody order. At order 3 that is already 2,097,152 possible states. At order 4 it is 268,435,456. Even with sparse storage, training on a standard corpus at order 4 would require gigabytes of memory and produce matrices so sparse that nearly every sample comes from smoothing noise rather than learned transitions. The model would not be learning music -- it would be memorizing short fragments from training files and failing silently everywhere else.
+
+The right response to wanting more expressive power is not a higher-order Markov chain. It is a fundamentally different architecture: an LSTM, a Transformer, or a dedicated music generation model. Those models solve the long-range dependency problem by design. This engine solves a different and more tractable problem: making the statistical regularities of a musical style explicit, interpretable, and audible at a scale where the math is still the point.
+
+
 
 ## Source coherence
 
@@ -70,7 +92,7 @@ By default the engine trains on the entire corpus for the selected style (hundre
 
 When `--single-source` is set, both harmony and melody models are trained on exactly one piece (the resolved source). The generated output shares the same chord vocabulary and note range as that piece, making the comparison between the original and the generated outputs meaningful. Use this whenever you want to hear what the engine learns from a specific piece.
 
- 
+
 
 ## Installation
 
@@ -102,7 +124,7 @@ pip install -r requirements.txt
 
 The Nottingham MIDI dataset is downloaded automatically the first time you run the engine for any style. No manual dataset setup is required.
 
- 
+
 
 ## CLI
 
@@ -165,7 +187,7 @@ Playback requires `pygame` (included in `requirements.txt`) and uses the system'
 
 WAV export (via FluidSynth) is attempted automatically after each MIDI write but is skipped gracefully if FluidSynth is not installed.
 
- 
+
 
 ## Example commands
 
@@ -253,7 +275,7 @@ python main.py --style pop --order 3 --yes --load-model models/pop3
 
 Multi-order saves write each order to `DIR/order{N}` (e.g. `models/pop/order1`, `models/pop/order2`). Single-order saves write directly to `DIR`.
 
- 
+
 
 ## Outputs
 
@@ -262,7 +284,8 @@ All generated files are written to `outputs/`:
 - `outputs/{style}_original.mid` - The source piece converted to MIDI for playback. Only created when `--play` is set.
 - `outputs/{style}_order{N}.mid` - Generated composition for order N.
 - `outputs/{style}_order{N}.wav` - WAV render of the above, if FluidSynth is installed.
- 
+
+
 
 ## WAV export (optional)
 
