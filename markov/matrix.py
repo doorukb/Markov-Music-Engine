@@ -88,7 +88,9 @@ class HierarchicalMarkovModel:
             return self._sample_notes_order1(chord_index, notes_per_chord)
         return self._sample_notes_order2(chord_index, notes_per_chord)
 
-    def _seed_note_for_chord(self, chord_index: ChordIndex) -> NoteIndex:
+    # returns an active row index of the chord's count matrix
+    # order-1: the row is a note index; order-2: the row is an encoded (prev, curr) state
+    def _seed_active_row(self, chord_index: ChordIndex) -> int:
         counts = self.melody.counts.get(chord_index)
         if counts is None:
             raise RuntimeError(f"Cannot generate notes: chord index {chord_index} was not seen during melody training.")
@@ -100,7 +102,7 @@ class HierarchicalMarkovModel:
     # sample notes for a given chord and order 1
     # return a list of note indices of length notes_per_chord
     def _sample_notes_order1(self, chord_index: ChordIndex, notes_per_chord: int) -> List[NoteIndex]:
-        notes: List[NoteIndex] = [self._seed_note_for_chord(chord_index)]
+        notes: List[NoteIndex] = [self._seed_active_row(chord_index)]
         current = notes[0]
         for _ in range(notes_per_chord - 1):
             current = self.melody.sample(chord_index, current)
@@ -109,30 +111,15 @@ class HierarchicalMarkovModel:
 
     # sample notes for a given chord and order 2
     # return a list of note indices of length notes_per_chord
-    def _current_note_after_prev(self, chord_index: ChordIndex, prev_note: NoteIndex) -> NoteIndex:
-        matrix = self.melody.transition_matrices.get(chord_index) if self.melody.transition_matrices else None
-        if matrix is None:
-            raise RuntimeError(f"Cannot generate notes: no transition matrix for chord index {chord_index}.")
-        
-        vocab = self.melody.note_vocab_size
-        row_indices = [prev_note * vocab + current for current in range(vocab)]
-        weights = np.array([matrix[row].sum() for row in row_indices], dtype=np.float64)
-        
-        if weights.sum() <= 0:
-            return self._seed_note_for_chord(chord_index)
-        return int(np.random.choice(np.arange(vocab), p=weights / weights.sum()))
-
     def _sample_notes_order2(self, chord_index: ChordIndex, notes_per_chord: int) -> List[NoteIndex]:
-        if notes_per_chord == 1:
-            return [self._seed_note_for_chord(chord_index)]
+        vocab = self.melody.note_vocab_size
+        # order-2 rows are encoded states: prev_note * vocab + current_note
+        state_row = self._seed_active_row(chord_index)
+        prev_note, current = divmod(state_row, vocab)
 
-        prev_note = self._seed_note_for_chord(chord_index)
-        current = self._current_note_after_prev(chord_index, prev_note)
-        notes = [prev_note, current]
-
+        notes: List[NoteIndex] = [prev_note, current][:notes_per_chord]
         for _ in range(notes_per_chord - 2):
-            state = (prev_note, current)
-            next_note = self.melody.sample(chord_index, state)
+            next_note = self.melody.sample(chord_index, (prev_note, current))
             notes.append(next_note)
             prev_note, current = current, next_note
         return notes

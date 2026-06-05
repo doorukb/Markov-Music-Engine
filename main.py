@@ -1,10 +1,9 @@
 """
 main entry point for the Markov Music Engine
 
-Usage :
+Example Usage :
     python main.py --style classical --order 1 --n-chords 16 --tempo 120
-    python main.py --style jazz --order 2 --compare
-
+    python main.py --style jazz --order 2 --compare --play
 """
 from __future__ import annotations
 import argparse
@@ -41,12 +40,52 @@ logger = logging.getLogger(__name__)
 
 _CHORD_VOCAB_FILE = "chord_vocab.json"
 _TOP_STATIONARY_ROWS = 10
+_MEASURE_QUARTER_LENGTH = 4.0
+
+# calculate the duration of a composition in seconds
+def _composition_duration_seconds(result: CompositionResult) -> float:
+    return len(result.composition) * _MEASURE_QUARTER_LENGTH * 60.0 / result.tempo_bpm
+
+# play a MIDI file with progress bars
+def play_midi_with_progress(path: Path, label: str, duration_seconds: float) -> None:
+    import time
+    import pygame
+    from tqdm import tqdm
+
+    print(f"\nNow playing: {label}")
+    pygame.mixer.music.load(str(path))
+    pygame.mixer.music.play()
+
+    bar_format = "{l_bar}{bar}| {n:.1f}/{total:.1f}s"
+    with tqdm(
+        total=round(duration_seconds, 1),
+        desc=label,
+        unit="s",
+        bar_format=bar_format,
+        ncols=70,
+    ) as pbar:
+        prev = 0.0
+        while pygame.mixer.music.get_busy():
+            time.sleep(0.1)
+            elapsed = min(pygame.mixer.music.get_pos() / 1000.0, duration_seconds)
+            pbar.update(round(elapsed - prev, 1))
+            prev = elapsed
+
+# play a sequence of MIDI files with progress bars
+def _play_sequence(tracks: list[tuple[str, Path, float]]) -> None:
+    import pygame
+
+    pygame.mixer.init()
+    try:
+        for label, path, duration in tracks:
+            play_midi_with_progress(path, label, duration)
+    finally:
+        pygame.mixer.quit()
+
 
 # build the command-line parser
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Train a hierarchical Markov model, generate music, and export MIDI/WAV.",
-    )
+    parser = argparse.ArgumentParser(description="Train a hierarchical Markov model, generate music, and export MIDI/WAV.")
     parser.add_argument(
         "--style",
         required=True,
@@ -101,6 +140,11 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="load_model",
         type=Path,
         help="Load a previously saved model from DIR instead of retraining.",
+    )
+    parser.add_argument(
+        "--play",
+        action="store_true",
+        help="Play generated MIDI file(s) in sequence after generation (requires pygame).",
     )
     return parser
 
@@ -214,7 +258,7 @@ def print_comparison_analysis(comparison: ComparisonResult, *, style: str) -> No
     )
 
 # render a composition to a MIDI and WAV file
-def render_composition(result: CompositionResult, output_stem: str) -> None:
+def render_composition(result: CompositionResult, output_stem: str) -> Path:
     midi_path = render_midi(result, f"{output_stem}.mid")
     print(f"MIDI written: {midi_path}")
 
@@ -223,6 +267,7 @@ def render_composition(result: CompositionResult, output_stem: str) -> None:
         print(f"WAV written:  {wav_path}")
     except RuntimeError as exc:
         print(f"WAV skipped:  {exc}", file=sys.stderr)
+    return midi_path
 
 # run the generation pipeline
 def run_generation(
@@ -235,7 +280,7 @@ def run_generation(
     notes_per_chord: int,
     tempo_bpm: int,
     output_stem: str,
-) -> None:
+) -> tuple[Path, CompositionResult]:
     composer = Composer(model)
     result = composer.compose(
         style=style,
@@ -244,7 +289,7 @@ def run_generation(
         notes_per_chord=notes_per_chord,
         tempo_bpm=tempo_bpm,
     )
-    render_composition(result, output_stem)
+    midi_path = render_composition(result, output_stem)
 
     matrix = model.harmony.transition_matrix
     if matrix is None:
@@ -253,6 +298,7 @@ def run_generation(
         summarise(matrix, index_to_chord),
         title=f"Harmony analysis - {style}, order {order}",
     )
+    return midi_path, result
 
 # run the comparison pipeline
 def run_compare(
@@ -264,6 +310,7 @@ def run_compare(
     corpus_paths: Sequence[Path],
     load_model: Path | None,
     save_model: Path | None,
+    play: bool = False,
 ) -> int:
     models: tuple[HierarchicalMarkovModel, HierarchicalMarkovModel] | None = None
     index_to_chord: list[ChordToken] | None = None
@@ -301,9 +348,17 @@ def run_compare(
             logger.info("Saving model to %s", save_dir)
             save_model_bundle(model, save_dir, chord_to_index)
 
-    render_composition(comparison.order1, f"{style}_order1")
-    render_composition(comparison.order2, f"{style}_order2")
+    midi1 = render_composition(comparison.order1, f"{style}_order1")
+    midi2 = render_composition(comparison.order2, f"{style}_order2")
     print_comparison_analysis(comparison, style=style)
+
+    if play:
+        _play_sequence(
+            [
+                (f"{style} order 1", midi1, _composition_duration_seconds(comparison.order1)),
+                (f"{style} order 2", midi2, _composition_duration_seconds(comparison.order2)),
+            ]
+        )
     return 0
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -332,6 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             corpus_paths=corpus_paths,
             load_model=args.load_model,
             save_model=args.save_model,
+            play=args.play,
         )
 
     if args.load_model is not None:
@@ -355,7 +411,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    run_generation(
+    midi_path, result = run_generation(
         model,
         index_to_chord,
         style=args.style,
@@ -365,6 +421,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         tempo_bpm=args.tempo,
         output_stem=f"{args.style}_order{args.order}",
     )
+    if args.play:
+        _play_sequence(
+            [
+                (
+                    f"{args.style} order {args.order}",
+                    midi_path,
+                    _composition_duration_seconds(result),
+                )
+            ]
+        )
     return 0
 
 if __name__ == "__main__":

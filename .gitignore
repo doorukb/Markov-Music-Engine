@@ -229,3 +229,6 @@ tests/test_parser.py
 tests/test_harmony.py
 tests/melody.py
 pytest.ini
+test_run.py
+outputs/*
+!outputs/.gitkeep
