@@ -7,16 +7,17 @@ All matplotlib plotting functions
 - All functions return matplotlib Figure objects (Streamlit-compatible)
 """
 from __future__ import annotations
-from typing import Sequence
+from typing import Mapping, Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from matplotlib.figure import Figure
 from markov.parser import ChordToken
 
-__all__ = ["plot_transition_matrix"]
+__all__ = ["plot_transition_matrix", "plot_stationary_distribution"]
 
 _MAX_CHORDS = 20
+_MAX_STATIONARY_BARS = 15
 _LABEL_MAX_LEN = 16
 
 # truncate the label for a chord
@@ -69,5 +70,43 @@ def plot_transition_matrix(transition_matrix: np.ndarray, index_to_chord: Sequen
     ax.set_ylabel("Current chord")
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
     plt.setp(ax.get_yticklabels(), rotation=0)
+    fig.tight_layout()
+    return fig
+
+# render the stationary distribution as a horizontal bar chart
+# Shows the top chords by long-run probability (capped at 15), sorted descending, with percentage labels on each bar
+def plot_stationary_distribution(stationary_dict: Mapping[ChordToken, float], title: str) -> Figure:
+    if not stationary_dict:
+        raise ValueError("stationary_dict must not be empty")
+
+    ranked = sorted(stationary_dict.items(), key=lambda item: item[1], reverse=True)
+    ranked = ranked[:_MAX_STATIONARY_BARS]
+    labels = [_truncate_label(chord) for chord, _ in ranked]
+    probs = [float(p) for _, p in ranked]
+
+    n = len(labels)
+    fig_height = max(4.0, 0.35 * n + 1.5)
+    fig, ax = plt.subplots(figsize=(8.0, fig_height))
+
+    y_pos = np.arange(n)
+    bars = ax.barh(y_pos, probs, color=sns.color_palette("Blues", n_colors=n + 2)[1], edgecolor="white")
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlim(0.0, max(probs) * 1.15 if probs else 1.0)
+    ax.set_xlabel("Stationary probability")
+    ax.set_title(title)
+
+    for bar, prob in zip(bars, probs):
+        width = bar.get_width()
+        ax.text(
+            width + max(probs) * 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            f"{prob * 100:.1f}%",
+            va="center",
+            ha="left",
+            fontsize=9,
+        )
+
     fig.tight_layout()
     return fig
