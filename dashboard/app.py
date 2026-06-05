@@ -22,7 +22,7 @@ from config import (  # noqa: E402
 from dashboard.playback_ui import PlaybackTrack, render_playback_studio  # noqa: E402
 from dashboard.player import PreparedAudio, prepare_audio, prepare_original_audio  # noqa: E402
 from markov.analysis import summarise  # noqa: E402
-from markov.audio_setup import ensure_soundfont  # noqa: E402
+from markov.audio_setup import ensure_audio_dependencies  # noqa: E402
 from markov.data import collect_chord_sequences, load_corpus  # noqa: E402
 from markov.encoder import ChordToken, build_chord_vocabulary  # noqa: E402
 from markov.generator import Composer, CompositionResult, MultiOrderResult  # noqa: E402
@@ -330,7 +330,7 @@ def _render_results() -> None:
 
     source = st.session_state.get("source_piece")
     if source is not None:
-        st.caption(f"Source piece: `{source}`")
+        st.caption(f"Source piece: `{Path(source).name}`")
 
 
 def main() -> None:
@@ -343,10 +343,10 @@ def main() -> None:
 
     if not st.session_state.soundfont_ready:
         try:
-            ensure_soundfont()
+            ensure_audio_dependencies()
             st.session_state.soundfont_ready = True
         except Exception as exc:
-            st.sidebar.warning(f"Soundfont setup: {exc}")
+            st.sidebar.warning(f"Audio setup: {exc}")
 
     st.title("Markov Music Engine")
     st.caption("Interactive dashboard with the same capabilities as the CLI — train, generate, analyze, and play.")
