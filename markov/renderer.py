@@ -162,9 +162,5 @@ def render_wav(midi_path: str | Path, output_path: str | Path) -> Path:
         errors.append(f"pyfluidsynth: {exc}")
         wav_path.unlink(missing_ok=True)
 
-    if wav_path.is_file():
-        logger.info("WAV written (pyfluidsynth): %s", wav_path)
-        return wav_path
-
     detail = "; ".join(errors) if errors else "no synthesizer available"
     raise RuntimeError(f"Could not render WAV: {detail}")

@@ -27,7 +27,7 @@ from markov.matrix import Composition, HierarchicalMarkovModel
 from markov.melody import MelodyChain
 from markov.parser import parse_midi
 
-__all__ = ["Composer", "CompositionResult", "ComparisonResult", "MultiOrderResult"]
+__all__ = ["Composer", "CompositionResult", "MultiOrderResult"]
 
 # generated composition and run metadata (no MIDI/audio)
 @dataclass(frozen=True)
@@ -37,17 +37,6 @@ class CompositionResult:
     order: int
     tempo_bpm: int
     metadata: dict[str, Any]
-
-# comparison result
-@dataclass(frozen=True)
-class ComparisonResult:
-    order1: CompositionResult
-    order2: CompositionResult
-    # both trained models are retained in memory simultaneously.
-    # callers (e.g. a Streamlit dashboard) should avoid holding multiple
-    # comparisonResult objects in session state at the same time.
-    models: tuple[HierarchicalMarkovModel, HierarchicalMarkovModel]
-    index_to_chord: tuple[ChordToken, ...]
 
 # multi-order result
 @dataclass(frozen=True)
@@ -99,74 +88,6 @@ class Composer:
             tempo_bpm=tempo_bpm,
         )
 
-    # compare two models and sample compositions from them
-    # unless models are given, train order-1 and order-2 models on the corpus
-    # sample both compositions and return them with the trained models
-    @classmethod
-    def compare(
-        cls,
-        style: str,
-        n_chords: int,
-        notes_per_chord: int = DEFAULT_N_CHORDS,
-        tempo_bpm: int = DEFAULT_TEMPO_BPM,
-        *,
-        corpus_paths: Sequence[Path] | None = None,
-        models: tuple[HierarchicalMarkovModel, HierarchicalMarkovModel] | None = None,
-        index_to_chord: Sequence[ChordToken] | None = None,
-    ) -> ComparisonResult:
-        _validate_compose_params(style, n_chords, 1, notes_per_chord, tempo_bpm)
-
-        if models is None:
-            paths = list(corpus_paths) if corpus_paths is not None else load_corpus(style)
-            chord_sequences = collect_chord_sequences(paths)
-            if not chord_sequences:
-                raise RuntimeError("No chord sequences could be parsed from the corpus.")
-
-            chord_to_index = build_chord_vocabulary(chord_sequences)
-            resolved_index_to_chord = tuple(chord_vocabulary_inverse(chord_to_index))
-            note_to_index = build_note_vocabulary()
-
-            model_order1 = _train_model(paths, order=1, chord_to_index=chord_to_index, note_to_index=note_to_index)
-            model_order2 = _train_model(paths, order=2, chord_to_index=chord_to_index, note_to_index=note_to_index)
-            models = (model_order1, model_order2)
-        else:
-            model_order1, model_order2 = models
-            if model_order1.melody.order != 1 or model_order2.melody.order != 2:
-                raise ValueError("compare() expects models with melody orders 1 and 2 respectively.")
-            if index_to_chord is None:
-                assert model_order1.harmony.vocab_size is not None
-                resolved_index_to_chord = tuple(
-                    f"chord_{i}" for i in range(model_order1.harmony.vocab_size)
-                )
-            else:
-                resolved_index_to_chord = tuple(index_to_chord)
-
-        _validate_model_ready(model_order1, order=1)
-        _validate_model_ready(model_order2, order=2)
-
-        order1_result = _compose_from_model(
-            model_order1,
-            style=style,
-            n_chords=n_chords,
-            order=1,
-            notes_per_chord=notes_per_chord,
-            tempo_bpm=tempo_bpm,
-        )
-        order2_result = _compose_from_model(
-            model_order2,
-            style=style,
-            n_chords=n_chords,
-            order=2,
-            notes_per_chord=notes_per_chord,
-            tempo_bpm=tempo_bpm,
-        )
-        return ComparisonResult(
-            order1=order1_result,
-            order2=order2_result,
-            models=models,
-            index_to_chord=resolved_index_to_chord,
-        )
-
     # compose a composition from a model for a given set of orders
     @classmethod
     def compose_orders(
@@ -212,7 +133,8 @@ class Composer:
                     raise ValueError(f"compose_orders() model for order {order} has melody order {trained_models[order].melody.order}.")
             if index_to_chord is None:
                 first_model = trained_models[unique_orders[0]]
-                assert first_model.harmony.vocab_size is not None
+                if first_model.harmony.vocab_size is None:
+                    raise RuntimeError("Cannot resolve chord labels: harmony layer has no vocabulary size.")
                 resolved_index_to_chord = tuple(f"chord_{i}" for i in range(first_model.harmony.vocab_size))
             else:
                 resolved_index_to_chord = tuple(index_to_chord)
@@ -267,7 +189,8 @@ def _validate_model_ready(model: HierarchicalMarkovModel, order: int) -> None:
 # sample a start chord from the model
 def _sample_start_chord(model: HierarchicalMarkovModel) -> ChordIndex:
     matrix = model.harmony.transition_matrix
-    assert matrix is not None
+    if matrix is None:
+        raise RuntimeError("Cannot sample start chord: harmony layer is not trained and normalized.")
 
     active = np.flatnonzero(matrix.sum(axis=1) > 0)
     active = active[active != UNK_CHORD_INDEX]

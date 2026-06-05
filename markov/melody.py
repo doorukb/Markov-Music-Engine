@@ -113,7 +113,7 @@ class MelodyChain:
     # accumulate note transition counts per chord context (raw counts only)
     def train(self, chord_sequence: Sequence[ChordIndex], note_sequence: Sequence[NoteIndex]) -> None:
         if len(chord_sequence) != len(note_sequence):
-            raise ValueError("chord_sequence and note_sequence must have the same length ({len(chord_sequence)} != {len(note_sequence)})")
+            raise ValueError(f"chord_sequence and note_sequence must have the same length ({len(chord_sequence)} != {len(note_sequence)})")
 
         min_notes = {1: 2, 2: 3, 3: 4}[self.order]
         if len(note_sequence) < min_notes:

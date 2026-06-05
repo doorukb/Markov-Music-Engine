@@ -123,9 +123,22 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-The Nottingham MIDI dataset is downloaded automatically the first time you run the engine for any style. No manual dataset setup is required.
+The Nottingham MIDI dataset is downloaded automatically the first time you run the engine for any style. No manual dataset setup is required. Each style selects its tunes by filename prefix under `data/raw/nottingham/MIDI/` (classical → `ashover*`, jazz → `jigs*`, pop → `reels*`) and is combined with the music21 fallback corpus. MIDI files that fail to parse are skipped with a warning rather than aborting the run, so a few malformed files in a large corpus degrade quietly.
 
 If generation fails with a missing `data/raw/nottingham/MIDI/` path, delete `data/raw/nottingham/` and re-run — `download_nottingham()` will fetch the full ZIP again. The engine uses MIDI files only (not ABC notation).
+
+## Run with Docker
+
+A `Dockerfile` and `docker-compose.yml` are included. The image bundles a system FluidSynth, so WAV rendering works inside the container.
+
+```bash
+make docker-build   # docker build -t markov-music-engine .
+make docker-run     # docker compose up
+```
+
+The dashboard is then served at http://localhost:8501. Generated audio and downloaded assets (soundfont, dataset) persist on the host via the `outputs/` and `data/` volume mounts.
+
+Note: in-container audio is WAV-via-FluidSynth served through the dashboard. The CLI `--play` flag uses pygame and the host's MIDI device, so it is a host-only path, not a container one.
 
 ## Dashboard (Streamlit)
 

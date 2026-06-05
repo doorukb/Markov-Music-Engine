@@ -217,28 +217,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-tests/
-tests/.pytest_cache/
-tests/__pycache__/
-tests/__init__.py
-tests/conftest.py
-tests/test_matrix.py
-tests/test_encoder.py
-tests/test_generator.py
-tests/test_parser.py
-tests/test_harmony.py
-tests/melody.py
-pytest.ini
-test_run.py
+# Generated outputs and downloaded assets
 outputs/*
 !outputs/.gitkeep
+data/raw/*
+!data/raw/.gitkeep
 data/soundfont.sf2
 data/bin/
 data/*.sf2.part
 models/
-dashboard/__pycache__/
-models/
-visualization/__pycache__/
-pytest.ini
-test_run.py
-scripts/
