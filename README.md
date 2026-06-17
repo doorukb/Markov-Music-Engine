@@ -1,5 +1,7 @@
 # Markov Music Engine
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 - Python 3.10+
 - music21
 - NumPy
